@@ -1,6 +1,16 @@
 /**
  * Browser-native JWT signing using Web Crypto API (HS256)
+ *
+ * Falls back to a pure-JS HMAC-SHA256 when crypto.subtle is unavailable,
+ * i.e. in a non-secure context (plain http:// on an IP/hostname, e.g. Docker).
+ * Web Crypto is only exposed over https:// or on localhost.
  */
+
+import { hmacSha256 } from './hmacSha256'
+
+function isSubtleAvailable(): boolean {
+  return typeof crypto !== 'undefined' && typeof crypto.subtle !== 'undefined'
+}
 
 function base64urlEncode(str: string): string {
   const base64 = btoa(str)
@@ -34,11 +44,17 @@ export async function signJwtHS256(payload: Record<string, unknown>, secret: str
 
   const signingInput = `${headerB64}.${payloadB64}`
 
-  const key = await importHmacKey(secret)
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(signingInput))
+  let signatureBytes: Uint8Array
+  if (isSubtleAvailable()) {
+    const key = await importHmacKey(secret)
+    const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(signingInput))
+    signatureBytes = new Uint8Array(signature)
+  } else {
+    signatureBytes = hmacSha256(encoder.encode(secret), encoder.encode(signingInput))
+  }
 
   const signatureB64 = base64urlEncode(
-    String.fromCharCode(...new Uint8Array(signature)),
+    String.fromCharCode(...signatureBytes),
   )
 
   return `${headerB64}.${payloadB64}.${signatureB64}`
