@@ -45,7 +45,7 @@ echo "[entrypoint] building SPA"
 pnpm --filter @inflowenger/inflow-ui build
 pnpm build
 echo "[entrypoint] serving dist/ on :$PORT"
-exec serve -s dist --no-clipboard -l "$PORT"
+exec serve -s -n dist  -l "$PORT"
 EOF
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
