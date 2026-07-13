@@ -4,6 +4,7 @@ export class ApiClient {
   private baseURL: string
   private defaultHeaders: Record<string, string>
   private timeout: number
+  private onUnauthorized?: () => void
 
   constructor(config: ApiClientConfig) {
     this.baseURL = config.baseURL.replace(/\/+$/, '')
@@ -29,6 +30,14 @@ export class ApiClient {
 
   clearAuthToken(): void {
     delete this.defaultHeaders['Authorization']
+  }
+
+  /**
+   * Register a handler invoked whenever a request comes back 401 Unauthorized.
+   * Used to surface the auth dialog when credentials are missing or expired.
+   */
+  setUnauthorizedHandler(handler: () => void): void {
+    this.onUnauthorized = handler
   }
 
   // ---------------------------------------------------------------------------
@@ -106,6 +115,9 @@ export class ApiClient {
       const apiResponse = await this.parseResponse<T>(response, config)
 
       if (!response.ok) {
+        if (response.status === 401) {
+          this.onUnauthorized?.()
+        }
         const error: ApiError = {
           message: `HTTP ${response.status}: ${response.statusText}`,
           status: response.status,

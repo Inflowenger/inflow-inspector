@@ -2,9 +2,10 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AuthDialog from '../auth/AuthDialog.vue'
+import { useAuth } from '../../composables/useAuth'
 
 const sidebarCollapsed = ref(false)
-const showAuthDialog = ref(false)
+const { showAuthDialog, openAuthDialog } = useAuth()
 
 const route = useRoute()
 const router = useRouter()
@@ -72,7 +73,7 @@ function goToExtensions() {
         <button
           class="auth-trigger-btn"
           title="Authentication"
-          @click="showAuthDialog = true"
+          @click="openAuthDialog"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
@@ -144,7 +145,7 @@ function goToExtensions() {
             <button
               class="infra-auth-btn"
               title="Authentication"
-              @click="showAuthDialog = true"
+              @click="openAuthDialog"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
