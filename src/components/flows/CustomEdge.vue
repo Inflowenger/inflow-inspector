@@ -12,34 +12,31 @@ const tags = ref<string[]>(props.data?.tags || [])
 const editingIndex = ref<number | null>(null)
 const editValue = ref('')
 
-// Calculate edge path based on type from data
-const edgePath = computed(() => {
+// Calculate edge path + on-path label anchor based on type from data.
+// The path helpers return [path, labelX, labelY] where labelX/labelY sit on
+// the real curve — so the label stays glued to the edge no matter how nodes
+// are dragged (linear interpolation would drift off curved edges).
+const edgeGeometry = computed(() => {
   const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition } = props
   const edgeType = props.data?.edgeType || 'default'
 
   if (edgeType === 'straight') {
-    const [path] = getStraightPath({ sourceX, sourceY, targetX, targetY })
-    return path
-  } else if (edgeType === 'step') {
-    const [path] = getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
-    return path
-  } else if (edgeType === 'smoothstep') {
-    const [path] = getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
-    return path
+    return getStraightPath({ sourceX, sourceY, targetX, targetY })
+  } else if (edgeType === 'step' || edgeType === 'smoothstep') {
+    return getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
   } else {
     // default - bezier curve
-    const [path] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
-    return path
+    return getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
   }
 })
 
-// Calculate label position (near source)
-const labelPosition = computed(() => {
-  const { sourceX, sourceY, targetX, targetY } = props
-  const x = sourceX + (targetX - sourceX) * 0.25
-  const y = sourceY + (targetY - sourceY) * 0.25
-  return { x, y }
-})
+const edgePath = computed(() => edgeGeometry.value[0])
+
+// Label anchor on the actual edge path (helper returns [path, labelX, labelY])
+const labelPosition = computed(() => ({
+  x: edgeGeometry.value[1],
+  y: edgeGeometry.value[2],
+}))
 
 function addTag() {
   if (newTag.value.trim()) {
