@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { apiClient } from '../../api/client'
 import { useApiMutation } from '../../api/hooks'
 import CodeEditor from '../common/CodeEditor.vue'
+import { Icon } from '@iconify/vue'
+import { iconCollections, DEFAULT_ICON_CLASS, DEFAULT_ICON_NAME } from '../../data/iconCatalog'
 import type { ExtensionRecord, ExtensionType,  } from '../../api/types'
 
 // JsonForms imports for preview
@@ -31,8 +33,8 @@ const error = ref<string | null>(null)
 const name = ref('')
 const description = ref('')
 const type = ref<ExtensionType>('extrinsic')
-const iconClass = ref('heroicons')
-const iconName = ref('puzzle-piece')
+const iconClass = ref(DEFAULT_ICON_CLASS)
+const iconName = ref(DEFAULT_ICON_NAME)
 
 // BindTo state (for extrinsic type)
 const bindToTopicKey = ref('')
@@ -62,50 +64,28 @@ const renderers = [
   ...vanillaRenderers.map((r) => ({ tester: r.tester, renderer: markRaw(r.renderer) })),
 ]
 
-// Icon picker
-interface IconOption {
-  name: string
-  svg: string
-}
-
-const iconOptions: IconOption[] = [
-  { name: 'puzzle-piece', svg: '<path d="M20.5 7.5a2.5 2.5 0 0 1-2.5 2.5h-1v3h1a2.5 2.5 0 0 1 2.5 2.5v1a2.5 2.5 0 0 1-2.5 2.5h-1v-3h-1v3h-3v-1h-3v1h-3v-3h1v-1h-3v1h-3v-3h1a2.5 2.5 0 0 1 2.5-2.5h1v-3h-1a2.5 2.5 0 0 1-2.5-2.5v-1a2.5 2.5 0 0 1 2.5-2.5h1v3h1v-3h3v1h3v-1h3v3h-1v1h3v-1h3v3h-1z"/>' },
-  { name: 'bolt', svg: '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>' },
-  { name: 'cube', svg: '<path d="M12 2l9 4.9V17L12 22l-9-5V6.9L12 2z"/><path d="M12 12l9-5"/><path d="M12 12v10"/><path d="M12 12L3 7"/>' },
-  { name: 'cloud', svg: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>' },
-  { name: 'database', svg: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>' },
-  { name: 'globe', svg: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>' },
-  { name: 'key', svg: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>' },
-  { name: 'link', svg: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>' },
-  { name: 'lock', svg: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>' },
-  { name: 'mail', svg: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>' },
-  { name: 'server', svg: '<rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>' },
-  { name: 'shield', svg: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>' },
-  { name: 'zap', svg: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>' },
-  { name: 'settings', svg: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>' },
-  { name: 'code', svg: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>' },
-  { name: 'terminal', svg: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>' },
-  { name: 'cpu', svg: '<rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>' },
-  { name: 'layers', svg: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>' },
-  { name: 'box', svg: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>' },
-  { name: 'plug', svg: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z"/>' },
-  { name: 'refresh-cw', svg: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' },
-  { name: 'rss', svg: '<path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>' },
-  { name: 'send', svg: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>' },
-  { name: 'share', svg: '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>' },
-  { name: 'wifi', svg: '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>' },
-]
-
+// Icon picker — icons come from real collections (mdi, lucide, heroicons,
+// brands) rendered via @iconify/vue. We store `icon.class` = collection id and
+// `icon.name` = icon name; `<Icon>` addresses them as `class:name`.
 const showIconPicker = ref(false)
+const iconSearch = ref('')
+const activeCollection = ref(DEFAULT_ICON_CLASS)
 
-function selectIcon(name: string) {
+// Full Iconify id for the currently selected icon (e.g. "mdi:web").
+const selectedIconId = computed(() => `${iconClass.value}:${iconName.value}`)
+
+const activeIcons = computed(() => {
+  const collection = iconCollections.find((c) => c.id === activeCollection.value)
+  if (!collection) return []
+  const q = iconSearch.value.trim().toLowerCase()
+  const names = q ? collection.icons.filter((n) => n.includes(q)) : collection.icons
+  return names.map((name) => ({ name, id: `${collection.id}:${name}` }))
+})
+
+function selectIcon(collectionId: string, name: string) {
+  iconClass.value = collectionId
   iconName.value = name
   showIconPicker.value = false
-}
-
-function getIconSvg(name: string): string {
-  const found = iconOptions.find(i => i.name === name)
-  return found ? found.svg : ''
 }
 
 // ---------------------------------------------------------------------------
@@ -238,8 +218,9 @@ async function fetchExtension() {
       description.value = ext.description || ''
       type.value = ext.type || 'plugin'
       if (ext.icon) {
-        iconClass.value = ext.icon.class || 'heroicons'
-        iconName.value = ext.icon.name || 'puzzle-piece'
+        iconClass.value = ext.icon.class || DEFAULT_ICON_CLASS
+        iconName.value = ext.icon.name || DEFAULT_ICON_NAME
+        activeCollection.value = iconClass.value
       }
       if (ext.params) {
         schemaJson.value = JSON.stringify(ext.params.schema || {}, null, 2) + '\n'
@@ -506,30 +487,40 @@ const hasJsonErrors = computed(() => !!schemaError.value || !!uiSchemaError.valu
       <!-- Icon Picker -->
       <div class="section-card">
         <div class="section-title">Icon</div>
-        <div class="icon-picker-row">
-          <div class="selected-icon" @click="showIconPicker = !showIconPicker">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <v-html :innerHTML="getIconSvg(iconName)" />
-            </svg>
-            <span class="icon-name">{{ iconName }}</span>
+        <div class="icon-picker">
+          <div class="icon-collections">
+            <button
+              v-for="col in iconCollections"
+              :key="col.id"
+              type="button"
+              class="icon-collection-tab"
+              :class="{ active: activeCollection === col.id }"
+              @click="activeCollection = col.id"
+            >
+              {{ col.label }}
+            </button>
           </div>
-          <button class="pick-icon-btn" @click="showIconPicker = !showIconPicker">
-            {{ showIconPicker ? 'Close' : 'Pick Icon' }}
-          </button>
-        </div>
-        <div v-if="showIconPicker" class="icon-grid">
-          <div
-            v-for="icon in iconOptions"
-            :key="icon.name"
-            class="icon-option"
-            :class="{ active: iconName === icon.name }"
-            @click="selectIcon(icon.name)"
-            :title="icon.name"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <v-html :innerHTML="icon.svg" />
-            </svg>
-            <span class="icon-label">{{ icon.name }}</span>
+
+          <input
+            v-model="iconSearch"
+            type="text"
+            class="icon-search"
+            placeholder="Search icons in this collection…"
+          />
+
+          <div class="icon-grid">
+            <div
+              v-for="icon in activeIcons"
+              :key="icon.id"
+              class="icon-option"
+              :class="{ active: selectedIconId === icon.id }"
+              :title="icon.id"
+              @click="selectIcon(activeCollection, icon.name)"
+            >
+              <Icon :icon="icon.id" width="20" height="20" />
+              <span class="icon-label">{{ icon.name }}</span>
+            </div>
+            <div v-if="activeIcons.length === 0" class="icon-empty">No icons match “{{ iconSearch }}”.</div>
           </div>
         </div>
       </div>
@@ -859,13 +850,75 @@ const hasJsonErrors = computed(() => !!schemaError.value || !!uiSchemaError.valu
   color: var(--accent, #aa3bff);
 }
 
+.icon-picker {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #e5e4e7);
+}
+
+.icon-collections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.icon-collection-tab {
+  padding: 4px 12px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 999px;
+  background: var(--bg, #fff);
+  color: var(--text, #6b6375);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.icon-collection-tab:hover {
+  border-color: var(--accent, #aa3bff);
+  color: var(--accent, #aa3bff);
+}
+
+.icon-collection-tab.active {
+  border-color: var(--accent, #aa3bff);
+  background: var(--accent-bg, rgba(170, 59, 255, 0.1));
+  color: var(--accent, #aa3bff);
+}
+
+.icon-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 6px;
+  background: var(--bg, #fff);
+  color: var(--text-h, #08060d);
+  outline: none;
+  margin-bottom: 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.icon-search:focus {
+  border-color: var(--accent, #aa3bff);
+  box-shadow: 0 0 0 2px var(--accent-bg, rgba(170, 59, 255, 0.2));
+}
+
 .icon-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border, #e5e4e7);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.icon-empty {
+  grid-column: 1 / -1;
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text, #6b6375);
 }
 
 .icon-option {
