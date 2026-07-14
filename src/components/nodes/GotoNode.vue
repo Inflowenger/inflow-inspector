@@ -130,13 +130,21 @@ function startTitleEdit() {
 .goto-node {
   position: relative;
   font-size: 14px;
-  padding: 10px 20px;
-  border-radius: 8px;
+  padding: 44px 20px 16px;
+  --node-rgb: 99, 102, 241;
+  --accent: rgb(var(--node-rgb));
+  --accent-bg: rgba(var(--node-rgb), 0.12);
+  --accent-border: rgba(var(--node-rgb), 0.5);
+  border-radius: 26px;
   border: 2px solid var(--goto-border, rgba(245, 158, 11, 0.5));
   background: var(--bg, #fff);
   color: var(--text-h, #08060d);
-  box-shadow: var(--shadow, rgba(0, 0, 0, 0.1) 0 10px 15px -3px);
+  box-shadow: var(--shadow, rgba(0, 0, 0, 0.1) 0 10px 15px -3px),
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.4),
+    inset 0 -8px 14px rgba(var(--node-rgb), 0.06);
+  background-image: linear-gradient(160deg, rgba(var(--node-rgb), 0.09), rgba(var(--node-rgb), 0) 55%);
   min-width: 140px;
+  min-height: 90px;
   text-align: center;
   font-weight: 500;
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -144,7 +152,9 @@ function startTitleEdit() {
 
 .goto-node:hover {
   border-color: var(--goto-accent, #f59e0b);
-  box-shadow: var(--shadow, rgba(0, 0, 0, 0.15) 0 12px 20px -3px);
+  box-shadow: var(--shadow, rgba(0, 0, 0, 0.18) 0 14px 22px -3px),
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.5),
+    inset 0 -8px 14px rgba(var(--node-rgb), 0.1);
 }
 
 .goto-node.has-goto {
@@ -159,8 +169,8 @@ function startTitleEdit() {
 /* Action buttons - top right */
 .node-actions {
   position: absolute;
-  top: 3px;
-  right: 4px;
+  top: 6px;
+  right: 16px;
   display: flex;
   gap: 2px;
   opacity: 0;
@@ -202,17 +212,20 @@ function startTitleEdit() {
 /* Node title */
 .node-title {
   position: absolute;
-  top: 0;
+  top: 22px;
   left: 0;
   right: 0;
-  height: 18px;
-  padding: 0 8px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
-  font-size: 8px;
-  font-weight: 300;
+  justify-content: flex-start;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
   cursor: text;
-  border-radius: 4px 4px 0 0;
   transition: background 0.15s;
 }
 .node-title:hover {
@@ -223,16 +236,17 @@ function startTitleEdit() {
 /* Inline title edit input */
 .title-edit-input {
   width: 100%;
-  height: 15px;
-  padding: 0 4px;
+  height: 22px;
+  padding: 0 6px;
   border: 1px solid var(--goto-accent, #f59e0b);
   border-radius: 3px;
   background: var(--bg, #fff);
   color: var(--text-h, #08060d);
-  font-size: 8px;
-  font-weight: 300;
+  font-size: 14px;
+  font-weight: 600;
   font-family: inherit;
   line-height: 1;
+  text-align: left;
   outline: none;
   box-shadow: 0 0 0 2px var(--goto-accent-bg, rgba(245, 158, 11, 0.2));
   box-sizing: border-box;

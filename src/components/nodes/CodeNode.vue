@@ -229,13 +229,21 @@ function startTitleEdit() {
 .custom-node {
   position: relative;
   font-size: 14px;
-  padding: 10px 20px;
-  border-radius: 8px;
-  border: 2px solid var(--accent-border, rgba(170, 59, 255, 0.5));
+  padding: 44px 20px 16px;
+  --node-rgb: 20, 184, 166;
+  --accent: rgb(var(--node-rgb));
+  --accent-bg: rgba(var(--node-rgb), 0.12);
+  --accent-border: rgba(var(--node-rgb), 0.5);
+  border-radius: 26px;
+  border: 2px solid var(--accent-border, rgba(var(--node-rgb), 0.5));
   background: var(--bg, #fff);
   color: var(--text-h, #08060d);
-  box-shadow: var(--shadow, rgba(0, 0, 0, 0.1) 0 10px 15px -3px);
+  box-shadow: var(--shadow, rgba(0, 0, 0, 0.1) 0 10px 15px -3px),
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.4),
+    inset 0 -8px 14px rgba(var(--node-rgb), 0.06);
+  background-image: linear-gradient(160deg, rgba(var(--node-rgb), 0.09), rgba(var(--node-rgb), 0) 55%);
   min-width: 140px;
+  min-height: 90px;
   text-align: center;
   font-weight: 500;
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -243,7 +251,9 @@ function startTitleEdit() {
 
 .custom-node:hover {
   border-color: var(--accent, #aa3bff);
-  box-shadow: var(--shadow, rgba(0, 0, 0, 0.15) 0 12px 20px -3px);
+  box-shadow: var(--shadow, rgba(0, 0, 0, 0.18) 0 14px 22px -3px),
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.5),
+    inset 0 -8px 14px rgba(var(--node-rgb), 0.1);
 }
 
 .custom-node.has-code {
@@ -254,8 +264,8 @@ function startTitleEdit() {
 /* Action buttons - top right */
 .node-actions {
   position: absolute;
-  top: 3px;
-  right: 4px;
+  top: 6px;
+  right: 16px;
   display: flex;
   gap: 2px;
   opacity: 0;
@@ -283,7 +293,7 @@ function startTitleEdit() {
 }
 
 .action-btn:hover {
-  background: var(--accent-bg, rgba(170, 59, 255, 0.1));
+  background: var(--accent-bg, rgba(var(--node-rgb), 0.1));
   color: var(--accent, #aa3bff);
   border-color: var(--accent, #aa3bff);
 }
@@ -297,39 +307,43 @@ function startTitleEdit() {
 /* Node title */
 .node-title {
   position: absolute;
-  top: 0;
+  top: 22px;
   left: 0;
   right: 0;
-  height: 18px;
-  padding: 0 8px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
-  font-size: 8px;
-  font-weight: 300;
+  justify-content: flex-start;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
   cursor: text;
-  border-radius: 4px 4px 0 0;
   transition: background 0.15s;
 }
 .node-title:hover {
-  background: var(--accent-bg, rgba(170, 59, 255, 0.05));
+  background: var(--accent-bg, rgba(var(--node-rgb), 0.05));
   color: var(--accent, #aa3bff);
 }
 
 /* Inline title edit input */
 .title-edit-input {
   width: 100%;
-  height: 15px;
-  padding: 0 4px;
+  height: 22px;
+  padding: 0 6px;
   border: 1px solid var(--accent, #aa3bff);
   border-radius: 3px;
   background: var(--bg, #fff);
   color: var(--text-h, #08060d);
-  font-size: 8px;
-  font-weight: 300;
+  font-size: 14px;
+  font-weight: 600;
   font-family: inherit;
   line-height: 1;
+  text-align: left;
   outline: none;
-  box-shadow: 0 0 0 2px var(--accent-bg, rgba(170, 59, 255, 0.2));
+  box-shadow: 0 0 0 2px var(--accent-bg, rgba(var(--node-rgb), 0.2));
   box-sizing: border-box;
 }
 
@@ -367,7 +381,7 @@ function startTitleEdit() {
 
 .popup-input:focus {
   border-color: var(--accent, #aa3bff);
-  box-shadow: 0 0 0 2px var(--accent-bg, rgba(170, 59, 255, 0.2));
+  box-shadow: 0 0 0 2px var(--accent-bg, rgba(var(--node-rgb), 0.2));
 }
 
 .popup-input::placeholder {
@@ -394,7 +408,7 @@ function startTitleEdit() {
 .popup-btn.update:hover {
   background: #9333ea;
   border-color: #9333ea;
-  box-shadow: 0 2px 6px rgba(170, 59, 255, 0.3);
+  box-shadow: 0 2px 6px rgba(var(--node-rgb), 0.3);
 }
 
 /* Custom handle styles - pill shaped */
@@ -411,7 +425,7 @@ function startTitleEdit() {
 
 :deep(.custom-handle:hover) {
   background: var(--accent, #aa3bff);
-  box-shadow: 0 0 0 3px var(--accent-bg, rgba(170, 59, 255, 0.2));
+  box-shadow: 0 0 0 3px var(--accent-bg, rgba(var(--node-rgb), 0.2));
   border-color: var(--accent, #aa3bff);
 }
 
@@ -430,7 +444,7 @@ function startTitleEdit() {
 /* When connecting */
 :deep(.custom-handle.connecting) {
   background: var(--accent, #aa3bff);
-  box-shadow: 0 0 0 4px var(--accent-bg, rgba(170, 59, 255, 0.3));
+  box-shadow: 0 0 0 4px var(--accent-bg, rgba(var(--node-rgb), 0.3));
 }
 
 /* Valid connection target */

@@ -78,10 +78,10 @@ function startTitleEdit() {
   background: var(--bg, #fff);
   color: var(--text-h, #08060d);
   box-shadow: var(--shadow, rgba(0, 0, 0, 0.1) 0 10px 15px -3px);
-  width: 100px;
-  height: 80px;
-  min-width: 100px;
-  min-height: 80px;
+  width: 72px;
+  height: 56px;
+  min-width: 72px;
+  min-height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -101,12 +101,12 @@ function startTitleEdit() {
   align-items: center;
   justify-content: center;
   width: 100%;
-  padding: 0 8px;
-  font-size: 11px;
+  padding: 0 6px;
+  font-size: 9px;
   font-weight: 500;
   cursor: text;
   text-align: center;
-  line-height: 1.2;
+  line-height: 1.15;
 }
 
 /* Inline title edit input */
