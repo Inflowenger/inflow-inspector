@@ -64,3 +64,227 @@ body {
   max-width: 100%;
   min-height: 100svh;
 }
+
+/* ---------------------------------------------------------------------------
+   JSON Forms (vanilla) — token-based theme
+   Class names come from the `styles` map provided in main.ts. Values here use
+   the app design tokens so forms match the app in light & dark mode.
+   --------------------------------------------------------------------------- */
+.if-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.if-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.if-input {
+  font-family: inherit;
+  font-size: 13px;
+}
+
+input.if-input:not([type='checkbox']):not([type='radio']),
+select.if-input,
+textarea.if-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  line-height: 1.4;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+input.if-input:focus,
+select.if-input:focus,
+textarea.if-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg);
+}
+
+input.if-input[type='checkbox'],
+input.if-input[type='radio'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.if-error {
+  font-size: 11px;
+  color: #ef4444;
+}
+
+.if-desc {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.if-vstack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.if-hstack {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+}
+
+.if-hstack-item {
+  flex: 1;
+}
+
+.if-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.if-group-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-h);
+  margin-bottom: 10px;
+}
+
+.if-array {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Override the 3 hardcoded colors vanilla.css bakes into array items
+   (rgb(238,238,238) label bar, etc.) with tokens. Scoped under .if-array so
+   these win over vanilla's single-class rules by specificity. */
+.if-array .array-list-item-label {
+  background: var(--code-bg);
+  color: var(--text-h);
+  border-radius: 4px;
+}
+
+.if-array .array-list-item-label:hover {
+  background: var(--border);
+}
+
+.if-array .array-list-item-toolbar > button {
+  cursor: pointer;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.if-array .array-list-item-toolbar > button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.if-array .array-list-item-content {
+  padding: 8px 0 0;
+}
+
+/* x-inflow-ui action button (decorator added by inflow-ui) */
+.if-inflow-field {
+  gap: 6px;
+}
+
+.if-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  transition: border-color 0.2s;
+}
+
+.if-btn:hover {
+  border-color: var(--accent-border);
+}
+
+.if-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  transition: border-color 0.2s;
+}
+
+.if-btn-icon:hover {
+  border-color: var(--accent-border);
+}
+
+/* oneOf "clear data?" confirm — native <dialog>, themed to match the app */
+.if-dialog {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 22px;
+  max-width: 340px;
+  background: var(--bg);
+  color: var(--text-h);
+  box-shadow: var(--shadow);
+}
+
+.if-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.if-dialog-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.if-dialog-body {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.if-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.if-btn-secondary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  transition: border-color 0.2s;
+}
+
+.if-btn-secondary:hover {
+  border-color: var(--accent-border);
+}

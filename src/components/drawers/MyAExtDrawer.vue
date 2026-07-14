@@ -1,17 +1,13 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, markRaw } from 'vue'
 import { type Node } from '@vue-flow/core'
 import { JsonForms } from '@jsonforms/vue'
 import { vanillaRenderers } from '@jsonforms/vue-vanilla'
 import {
   InflowControlRenderer,
   InflowLayoutRenderer,
-  InflowOneOfRenderer,
-  InflowEnumRenderer,
   inflowControlTester,
-  inflowLayoutTester,
-  inflowOneOfTester,
-  inflowEnumTester
+  inflowLayoutTester
 } from '@inflowenger/inflow-ui'
 
 interface ExtensionParams {
@@ -28,12 +24,12 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
 }>()
 
+// markRaw every renderer component — JSON Forms stores them in a reactive()
+// context and would otherwise Proxy each component, breaking value reflection.
 const renderers = [
-  { tester: inflowControlTester, renderer: InflowControlRenderer },
-  { tester: inflowLayoutTester, renderer: InflowLayoutRenderer },
-  { tester: inflowOneOfTester, renderer: InflowOneOfRenderer },
-  { tester: inflowEnumTester, renderer: InflowEnumRenderer },
-  ...vanillaRenderers
+  { tester: inflowControlTester, renderer: markRaw(InflowControlRenderer) },
+  { tester: inflowLayoutTester, renderer: markRaw(InflowLayoutRenderer) },
+  ...vanillaRenderers.map((r) => ({ tester: r.tester, renderer: markRaw(r.renderer) })),
 ]
 
 const showDrawer = computed({

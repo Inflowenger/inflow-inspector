@@ -15,6 +15,10 @@ const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     {
+      path: '/debug-enum',
+      component: () => import('../components/DebugEnum.vue'),
+    },
+    {
       path: '/',
       component: AppLayout,
       redirect: '/workflows',

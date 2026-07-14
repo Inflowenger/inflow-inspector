@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted } from 'vue'
+import { ref, watch, nextTick, computed, onMounted, markRaw } from 'vue'
 import { useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, type Node, type Edge, type Connection, MarkerType, Panel } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -10,12 +10,8 @@ import { vanillaRenderers } from '@jsonforms/vue-vanilla'
 import {
   InflowControlRenderer,
   InflowLayoutRenderer,
-  InflowOneOfRenderer,
-  InflowEnumRenderer,
   inflowControlTester,
-  inflowLayoutTester,
-  inflowOneOfTester,
-  inflowEnumTester
+  inflowLayoutTester
 } from '@inflowenger/inflow-ui'
 import NodePalette from './NodePalette.vue'
 import CustomNode from '../nodes/CustomNode.vue'
@@ -57,12 +53,12 @@ function goBack() {
   router.push({ name: 'workflows' })
 }
 
+// markRaw every renderer component — JSON Forms stores them in a reactive()
+// context and would otherwise Proxy each component, breaking value reflection.
 const renderers = [
-  { tester: inflowControlTester, renderer: InflowControlRenderer },
-  { tester: inflowLayoutTester, renderer: InflowLayoutRenderer },
-  { tester: inflowOneOfTester, renderer: InflowOneOfRenderer },
-  { tester: inflowEnumTester, renderer: InflowEnumRenderer },
-  ...vanillaRenderers
+  { tester: inflowControlTester, renderer: markRaw(InflowControlRenderer) },
+  { tester: inflowLayoutTester, renderer: markRaw(InflowLayoutRenderer) },
+  ...vanillaRenderers.map((r) => ({ tester: r.tester, renderer: markRaw(r.renderer) })),
 ]
 
 // ---- Settings Drawer ----

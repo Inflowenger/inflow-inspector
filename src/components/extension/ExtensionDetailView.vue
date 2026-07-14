@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, markRaw } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiClient } from '../../api/client'
 import { useApiMutation } from '../../api/hooks'
@@ -12,12 +12,8 @@ import { vanillaRenderers } from '@jsonforms/vue-vanilla'
 import {
   InflowControlRenderer,
   InflowLayoutRenderer,
-  InflowOneOfRenderer,
-  InflowEnumRenderer,
   inflowControlTester,
-  inflowLayoutTester,
-  inflowOneOfTester,
-  inflowEnumTester
+  inflowLayoutTester
 } from '@inflowenger/inflow-ui'
 
 const props = defineProps<{
@@ -55,12 +51,15 @@ const uiSchemaError = ref<string | null>(null)
 const showPreview = ref(false)
 const previewData = ref<Record<string, any>>({})
 
+// markRaw every renderer component: JSON Forms stores the renderers array in a
+// reactive() context, which would otherwise wrap each component in a Proxy —
+// destabilising component identity and breaking value reflection (e.g. the enum
+// <select> not showing its data). markRaw must be per-component because our
+// InflowControlRenderer rebuilds a filtered array for its inner DispatchRenderer.
 const renderers = [
-  { tester: inflowControlTester, renderer: InflowControlRenderer },
-  { tester: inflowLayoutTester, renderer: InflowLayoutRenderer },
-  { tester: inflowOneOfTester, renderer: InflowOneOfRenderer },
-  { tester: inflowEnumTester, renderer: InflowEnumRenderer },
-  ...vanillaRenderers
+  { tester: inflowControlTester, renderer: markRaw(InflowControlRenderer) },
+  { tester: inflowLayoutTester, renderer: markRaw(InflowLayoutRenderer) },
+  ...vanillaRenderers.map((r) => ({ tester: r.tester, renderer: markRaw(r.renderer) })),
 ]
 
 // Icon picker
@@ -199,8 +198,26 @@ const parsedUiSchema = computed(() => {
   }
 })
 
+// Build an initial data object from the schema's `default`s (incl. nested
+// objects). JSON Forms does not inject schema defaults into empty data on its
+// own, so we seed them here for the preview. Kept as a plain schema walk so it
+// stays independent of JSON Forms internals / versions.
+function buildDefaults(schema: any): any {
+  if (!schema || typeof schema !== 'object') return undefined
+  if ('default' in schema) return schema.default
+  if (schema.type === 'object' && schema.properties) {
+    const obj: Record<string, any> = {}
+    for (const [key, sub] of Object.entries<any>(schema.properties)) {
+      const val = buildDefaults(sub)
+      if (val !== undefined) obj[key] = val
+    }
+    return Object.keys(obj).length ? obj : undefined
+  }
+  return undefined
+}
+
 function openPreview() {
-  previewData.value = {}
+  previewData.value = buildDefaults(parsedSchema.value) ?? {}
   showPreview.value = true
 }
 
@@ -248,19 +265,105 @@ onMounted(() => {
     fetchExtension()
   } else {
     schemaJson.value = JSON.stringify({
-      type: 'object',
-      properties: {
-        name: { type: 'string', title: 'Name' },
-        enabled: { type: 'boolean', title: 'Enabled' },
-      }
-    }, null, 2) + '\n'
-    uiSchemaJson.value = JSON.stringify({
-      type: 'VerticalLayout',
-      elements: [
-        { type: 'Control', scope: '#/properties/name' },
-        { type: 'Control', scope: '#/properties/enabled' },
+  "type": "object",
+  "title": "Jira Connector",
+  "properties": {
+    "connection": {
+      "type": "object",
+      "title": "Connection",
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "title": "Protocol",
+          "enum": ["http", "https", "ws", "wss"],
+          "default": "https"
+        },
+        "host": { "type": "string", "title": "Host", "default": "localhost" },
+        "port": { "type": "integer", "title": "Port", "minimum": 1, "maximum": 65535, "default": 443 },
+        "secure": { "type": "boolean", "title": "Use TLS", "default": true }
+      },
+      "required": ["protocol", "host"]
+    },
+    "project": {
+      "type": "string",
+      "title": "Project",
+      "enum": ["ENG", "OPS", "MARKETING"]
+    },
+    "labels": {
+      "type": "array",
+      "title": "Labels",
+      "items": { "type": "string" }
+    },
+    "authentication": {
+      "title": "Authentication",
+      "oneOf": [
+        {
+          "title": "API Key",
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "apiKey" },
+            "apiKey": { "type": "string", "title": "API Key", "format": "password" }
+          },
+          "required": ["apiKey"]
+        },
+        {
+          "title": "OAuth2",
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "oauth2" },
+            "clientId": { "type": "string", "title": "Client ID" },
+            "clientSecret": { "type": "string", "title": "Client Secret", "format": "password" }
+          },
+          "required": ["clientId", "clientSecret"]
+        }
       ]
-    }, null, 2) + '\n'
+    }
+  },
+  "required": ["project"]
+}, null, 2) + '\n'
+    uiSchemaJson.value = JSON.stringify({
+  "type": "VerticalLayout",
+  "elements": [
+    {
+      "type": "Group",
+      "label": "Connection",
+      "elements": [
+        {
+          "type": "Control",
+          "scope": "#/properties/connection/properties/protocol",
+          "label": "Protocol",
+          "x-inflow-ui": {
+            "action": { "name": "refreshForm" },
+            "button": { "position": "append", "icon": "↻", "label": "Reload" }
+          }
+        },
+        {
+          "type": "HorizontalLayout",
+          "elements": [
+            { "type": "Control", "scope": "#/properties/connection/properties/host", "label": "Host" },
+            { "type": "Control", "scope": "#/properties/connection/properties/port", "label": "Port" }
+          ]
+        },
+        { "type": "Control", "scope": "#/properties/connection/properties/secure", "label": "Use TLS" }
+      ]
+    },
+    {
+      "type": "Group",
+      "label": "Issue",
+      "elements": [
+        { "type": "Control", "scope": "#/properties/project", "label": "Project" },
+        { "type": "Control", "scope": "#/properties/labels", "label": "Labels" }
+      ]
+    },
+    {
+      "type": "Group",
+      "label": "Authentication",
+      "elements": [
+        { "type": "Control", "scope": "#/properties/authentication" }
+      ]
+    }
+  ]
+}, null, 2) + '\n'
     if (type.value === 'extrinsic') {
       fetchExtrinsics()
     }
