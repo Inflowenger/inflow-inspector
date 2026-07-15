@@ -58,6 +58,26 @@ watch(
   }
 )
 
+/**
+ * Raw mode renders every line as the JSON the engine actually published.
+ *
+ * This is an inspector: the readable view is the default because it's what you
+ * scan, but the unedited event has to stay one click away — a pretty summary
+ * you can't check against the wire is worse than useless when you're debugging
+ * the engine itself.
+ */
+const viewMode = ref<'pretty' | 'raw'>('pretty')
+const filterKind = ref<string>('all')
+const expanded = ref<Set<string>>(new Set())
+const copiedId = ref<string | null>(null)
+
+/** Kinds actually present, so the filter only ever offers real options. */
+const availableKinds = computed(() => {
+  const kinds = new Set<string>()
+  for (const m of props.messages) if (m.kind) kinds.add(m.kind)
+  return [...kinds].sort()
+})
+
 const filteredMessages = computed(() => {
   let result = props.messages
 
@@ -65,12 +85,20 @@ const filteredMessages = computed(() => {
     result = result.filter((m) => m.level === filterLevel.value)
   }
 
+  if (filterKind.value !== 'all') {
+    result = result.filter((m) => m.kind === filterKind.value)
+  }
+
   if (searchQuery.value.trim()) {
     const q = searchQuery.value.toLowerCase()
-    result = result.filter((m) =>
-      m.message.toLowerCase().includes(q) ||
-      m.stage?.toLowerCase().includes(q) ||
-      m.nodeTitle?.toLowerCase().includes(q)
+    result = result.filter(
+      (m) =>
+        m.message.toLowerCase().includes(q) ||
+        m.kind?.toLowerCase().includes(q) ||
+        m.src?.toLowerCase().includes(q) ||
+        m.nodeTitle?.toLowerCase().includes(q) ||
+        m.nodeId?.toLowerCase().includes(q) ||
+        m.flow?.toLowerCase().includes(q),
     )
   }
 
@@ -78,12 +106,14 @@ const filteredMessages = computed(() => {
 })
 
 const levelCounts = computed(() => {
-  const counts: Record<LogLevel | 'all', number> = { all: props.messages.length, info: 0, warn: 0, error: 0, debug: 0, success: 0 }
+  const counts: Record<string, number> = { all: props.messages.length, info: 0, warn: 0, error: 0, debug: 0, success: 0 }
   for (const m of props.messages) {
     counts[m.level] = (counts[m.level] ?? 0) + 1
   }
   return counts
 })
+
+const errorCount = computed(() => props.messages.filter((m) => m.level === 'error').length)
 
 function formatTime(ts: number): string {
   const d = new Date(ts)
@@ -106,8 +136,69 @@ function levelClass(level: LogLevel): string {
   return `level-${level}`
 }
 
+/** Short label for the kind badge — the `node.`/`proc.` prefix is just noise. */
+function kindLabel(kind?: string): string {
+  if (!kind) return ''
+  return kind.replace(/^(node|proc|edge|flow)\./, '')
+}
+
+/** Group kinds by what they mean, so the badge colour carries information. */
+function kindClass(kind?: string): string {
+  if (!kind) return 'kind-other'
+  if (kind === 'proc.start' || kind === 'proc.finish') return 'kind-proc'
+  if (kind === 'edge.select' || kind === 'flow.jump') return 'kind-route'
+  if (kind.startsWith('node.')) return 'kind-node'
+  if (kind === 'log') return 'kind-log'
+  return 'kind-other'
+}
+
+function nodeLabel(msg: FlowLogMessage): string {
+  if (!msg.nodeId) return ''
+  return msg.nodeTitle ? `${msg.nodeTitle} · ${msg.nodeId}` : msg.nodeId
+}
+
+function rawJson(msg: FlowLogMessage): string {
+  return msg.event ? JSON.stringify(msg.event, null, 2) : JSON.stringify({ message: msg.message }, null, 2)
+}
+
+function isExpandable(msg: FlowLogMessage): boolean {
+  return msg.event !== undefined
+}
+
 function toggleExpand(msg: FlowLogMessage) {
-  ;(msg as any)._expanded = !(msg as any)._expanded
+  if (!isExpandable(msg)) return
+  const next = new Set(expanded.value)
+  next.has(msg.id) ? next.delete(msg.id) : next.add(msg.id)
+  expanded.value = next
+}
+
+async function copyRow(msg: FlowLogMessage) {
+  try {
+    await navigator.clipboard.writeText(rawJson(msg))
+    copiedId.value = msg.id
+    setTimeout(() => {
+      if (copiedId.value === msg.id) copiedId.value = null
+    }, 1200)
+  } catch {
+    /* clipboard unavailable — nothing useful to say */
+  }
+}
+
+/** Export what's on screen, as JSONL — the shape the engine emits and tools read. */
+async function copyAll() {
+  const jsonl = filteredMessages.value
+    .map((m) => (m.event ? JSON.stringify(m.event) : null))
+    .filter(Boolean)
+    .join('\n')
+  try {
+    await navigator.clipboard.writeText(jsonl)
+    copiedId.value = '__all__'
+    setTimeout(() => {
+      if (copiedId.value === '__all__') copiedId.value = null
+    }, 1200)
+  } catch {
+    /* clipboard unavailable */
+  }
 }
 </script>
 
@@ -134,17 +225,30 @@ function toggleExpand(msg: FlowLogMessage) {
           >
             {{ connected ? 'Live' : connecting ? 'Connecting…' : 'Offline' }}
           </span>
+          <span v-if="errorCount > 0" class="error-badge" :title="`${errorCount} error events`">
+            {{ errorCount }} error{{ errorCount === 1 ? '' : 's' }}
+          </span>
         </div>
 
         <div class="log-header-actions">
-          <!-- Filter -->
-          <select v-model="filterLevel" class="log-filter" title="Filter by level">
-            <option value="all">All ({{ levelCounts.all }})</option>
+          <!-- Level: severity only -->
+          <select v-model="filterLevel" class="log-filter" title="Filter by severity">
+            <option value="all">All levels ({{ levelCounts.all }})</option>
             <option value="info">Info ({{ levelCounts.info }})</option>
-            <option value="success">Success ({{ levelCounts.success }})</option>
             <option value="warn">Warn ({{ levelCounts.warn }})</option>
             <option value="error">Error ({{ levelCounts.error }})</option>
             <option value="debug">Debug ({{ levelCounts.debug }})</option>
+          </select>
+
+          <!-- Kind: what happened. Orthogonal to level, so filter separately. -->
+          <select
+            v-if="availableKinds.length > 0"
+            v-model="filterKind"
+            class="log-filter"
+            title="Filter by event kind"
+          >
+            <option value="all">All kinds</option>
+            <option v-for="k in availableKinds" :key="k" :value="k">{{ k }}</option>
           </select>
 
           <!-- Search -->
@@ -154,6 +258,37 @@ function toggleExpand(msg: FlowLogMessage) {
             placeholder="Search…"
             class="log-search"
           />
+
+          <!-- Pretty / raw -->
+          <div class="view-toggle" role="group" aria-label="View mode">
+            <button
+              class="view-toggle-btn"
+              :class="{ active: viewMode === 'pretty' }"
+              title="Readable summaries"
+              @click="viewMode = 'pretty'"
+            >
+              Pretty
+            </button>
+            <button
+              class="view-toggle-btn"
+              :class="{ active: viewMode === 'raw' }"
+              title="Raw JSON exactly as published"
+              @click="viewMode = 'raw'"
+            >
+              JSON
+            </button>
+          </div>
+
+          <!-- Copy visible as JSONL -->
+          <button class="log-action-btn" title="Copy visible events as JSONL" @click="copyAll">
+            <svg v-if="copiedId !== '__all__'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </button>
 
           <!-- Reconnect -->
           <button
@@ -195,24 +330,55 @@ function toggleExpand(msg: FlowLogMessage) {
           <span v-if="!connected">Socket is not connected. Start a flow to see logs.</span>
         </div>
 
-        <div
-          v-for="msg in filteredMessages"
-          :key="msg.id"
-          class="log-item"
-          :class="[levelClass(msg.level), { expandable: msg.data !== undefined }]"
-          @click="msg.data !== undefined && toggleExpand(msg)"
-        >
-          <div class="log-item-main">
-            <span class="log-time">{{ formatTime(msg.timestamp) }}</span>
-            <span class="log-level-icon" :class="levelClass(msg.level)">{{ levelIcon(msg.level) }}</span>
-            <span v-if="msg.stage" class="log-stage">{{ msg.stage }}</span>
-            <span v-if="msg.nodeTitle" class="log-node">{{ msg.nodeTitle }}</span>
-            <span class="log-message">{{ msg.message }}</span>
+        <!-- Raw: the events exactly as the engine published them. -->
+        <template v-if="viewMode === 'raw'">
+          <div
+            v-for="msg in filteredMessages"
+            :key="msg.id"
+            class="log-raw-item"
+            :class="levelClass(msg.level)"
+          >
+            <button class="row-copy" title="Copy this event" @click.stop="copyRow(msg)">
+              {{ copiedId === msg.id ? '✓' : '⧉' }}
+            </button>
+            <pre>{{ rawJson(msg) }}</pre>
           </div>
-          <div v-if="msg.data && (msg as any)._expanded" class="log-item-data">
-            <pre>{{ JSON.stringify(msg.data, null, 2) }}</pre>
+        </template>
+
+        <!-- Pretty: one scannable line per event. -->
+        <template v-else>
+          <div
+            v-for="msg in filteredMessages"
+            :key="msg.id"
+            class="log-item"
+            :class="[levelClass(msg.level), { expandable: isExpandable(msg), expanded: expanded.has(msg.id) }]"
+            @click="toggleExpand(msg)"
+          >
+            <div class="log-item-main">
+              <span class="log-chevron">{{ isExpandable(msg) ? (expanded.has(msg.id) ? '▾' : '▸') : '' }}</span>
+              <span class="log-time">{{ formatTime(msg.timestamp) }}</span>
+              <span class="log-seq" :title="`seq ${msg.seq} — the engine's ordering key`">
+                {{ msg.seq !== undefined ? `#${msg.seq}` : '' }}
+              </span>
+              <span class="log-level-icon" :class="levelClass(msg.level)">{{ levelIcon(msg.level) }}</span>
+              <span v-if="msg.kind" class="log-kind" :class="kindClass(msg.kind)">{{ kindLabel(msg.kind) }}</span>
+              <span v-if="msg.src && msg.src !== 'rt'" class="log-src" :title="`emitted by ${msg.src}`">{{ msg.src }}</span>
+              <span v-if="msg.nodeId" class="log-node" :title="`${msg.flow} / ${msg.nodeId}`">{{ nodeLabel(msg) }}</span>
+              <span class="log-message">{{ msg.message }}</span>
+              <button
+                v-if="isExpandable(msg)"
+                class="row-copy"
+                title="Copy this event as JSON"
+                @click.stop="copyRow(msg)"
+              >
+                {{ copiedId === msg.id ? '✓' : '⧉' }}
+              </button>
+            </div>
+            <div v-if="expanded.has(msg.id)" class="log-item-data">
+              <pre>{{ rawJson(msg) }}</pre>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
     </div>
   </transition>
@@ -557,5 +723,163 @@ function toggleExpand(msg: FlowLogMessage) {
   .log-search {
     width: 100px;
   }
+}
+</style>
+
+<style scoped>
+/* ---- structured log viewer ---- */
+
+.error-badge {
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(231, 76, 60, 0.12);
+  color: #e74c3c;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* Pretty / JSON switch */
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.view-toggle-btn {
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #8a8590);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.view-toggle-btn:hover {
+  color: var(--text-h, #08060d);
+}
+
+.view-toggle-btn.active {
+  background: var(--accent, #aa3bff);
+  color: #fff;
+}
+
+/* Row affordances */
+.log-chevron {
+  flex: 0 0 10px;
+  color: var(--text-muted, #b9b5bf);
+  font-size: 9px;
+  user-select: none;
+}
+
+.log-seq {
+  flex: 0 0 auto;
+  min-width: 30px;
+  color: var(--text-muted, #b9b5bf);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+/* Kind badge — colour carries the category, so scanning works without reading */
+.log-kind {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.kind-proc {
+  background: rgba(170, 59, 255, 0.14);
+  color: #8a2bd6;
+}
+
+.kind-node {
+  background: rgba(52, 152, 219, 0.14);
+  color: #2478b5;
+}
+
+.kind-route {
+  background: rgba(46, 204, 113, 0.16);
+  color: #1e8449;
+}
+
+.kind-log {
+  background: rgba(140, 140, 150, 0.14);
+  color: #6b6375;
+}
+
+.kind-other {
+  background: rgba(241, 196, 15, 0.18);
+  color: #9a7d0a;
+}
+
+.log-src {
+  flex: 0 0 auto;
+  color: var(--accent, #aa3bff);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.row-copy {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--text-muted, #b9b5bf);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
+}
+
+.log-item:hover .row-copy,
+.log-raw-item:hover .row-copy {
+  opacity: 1;
+}
+
+.row-copy:hover {
+  color: var(--accent, #aa3bff);
+}
+
+.log-item.expanded {
+  background: var(--bg-soft, rgba(0, 0, 0, 0.02));
+}
+
+/* Raw JSON mode */
+.log-raw-item {
+  position: relative;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-soft, rgba(0, 0, 0, 0.04));
+}
+
+.log-raw-item pre {
+  margin: 0;
+  overflow-x: auto;
+  color: var(--text, #4b4553);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-raw-item.level-error pre {
+  color: #c0392b;
+}
+
+.log-raw-item .row-copy {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  margin: 0;
 }
 </style>

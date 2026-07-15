@@ -1,18 +1,37 @@
-import { ref, onUnmounted, type Ref } from 'vue'
+import { ref, onUnmounted, shallowRef, type Ref } from 'vue'
 import { io, type Socket } from 'socket.io-client'
+import {
+  createFlowTracker,
+  type FlowTracker,
+  type Level,
+  type ProcEvent,
+} from '@inflowenger/flow-trace'
 import { apiClient } from '../api/client'
 
-export type LogLevel = 'info' | 'warn' | 'error' | 'debug' | 'success'
+export type LogLevel = Level | 'success'
 
+/**
+ * One line in the log drawer.
+ *
+ * `event` is the raw event exactly as the engine published it — the inspector's
+ * job is to show what actually came off the wire, so nothing is dropped on the
+ * way in. Everything else is derived for display.
+ */
 export interface FlowLogMessage {
   id: string
   timestamp: number
   level: LogLevel
-  stage?: string
+  /** Human-readable one-liner. See `summarize`. */
   message: string
+  /** Present for events off the wire; absent for local notices (connect, etc.). */
+  event?: ProcEvent
+  pid?: string
+  seq?: number
+  kind?: string
+  src?: string
+  flow?: string
   nodeId?: string
   nodeTitle?: string
-  data?: unknown
 }
 
 export interface SocketState {
@@ -23,6 +42,60 @@ export interface SocketState {
 
 let globalSocket: Socket | null = null
 
+/** Cap on retained log lines. A looping flow emits without bound. */
+const MAX_MESSAGES = 5000
+
+function shortNode(flow?: string, node?: string): string {
+  if (!flow || !node) return ''
+  return `${flow}/${node}`
+}
+
+/**
+ * A readable one-liner per event kind.
+ *
+ * The raw JSON is always one click away, so this optimises for scanning: what
+ * happened, to which node, and why.
+ */
+function summarize(event: ProcEvent): string {
+  const d = (event.detail ?? {}) as Record<string, any>
+  switch (event.kind) {
+    case 'proc.start':
+      return `Process started at ${shortNode(d.flow, d.node)}`
+    case 'proc.finish': {
+      const ms = d.durationMs ?? 0
+      if (d.status === 'completed') return `Process completed in ${ms}ms`
+      if (d.status === 'stopped') return `Process stopped after ${ms}ms`
+      return `Process failed after ${ms}ms${d.error ? `: ${d.error}` : ''}`
+    }
+    case 'node.enter': {
+      const attempt = d.attempt > 1 ? ` (attempt ${d.attempt})` : ''
+      return `→ ${d.title ?? event.node} entered${attempt}`
+    }
+    case 'node.exit': {
+      if (d.status === 'error') return `✕ exited with error: ${d.error ?? 'unknown'}`
+      return `✓ exited ok in ${d.durationMs ?? 0}ms`
+    }
+    case 'edge.select': {
+      const taken = (d.taken ?? []) as Array<{ node: string }>
+      const pruned = (d.pruned ?? []) as Array<{ node: string }>
+      const reason = d.reason?.tags?.length ? ` on [${d.reason.tags.join(', ')}]` : ''
+      if (taken.length === 0) return `Routed nowhere${reason}`
+      const targets = taken.map((t) => t.node).join(', ')
+      const skipped = pruned.length > 0 ? `, skipped ${pruned.length}` : ''
+      return `Routed to ${targets}${reason}${skipped}`
+    }
+    case 'flow.jump':
+      return `Jumped to ${shortNode(d.to?.flow, d.to?.node)}${
+        d.ret ? `, returns at ${shortNode(d.ret.flow, d.ret.node)}` : ''
+      }`
+    case 'log':
+      return String(d.msg ?? '')
+    default:
+      // An unknown kind from a newer engine — show it rather than hide it.
+      return `${event.kind}`
+  }
+}
+
 export function useSocketIO() {
   const socket: Ref<Socket | null> = ref(null)
   const state = ref<SocketState>({
@@ -32,7 +105,15 @@ export function useSocketIO() {
   })
   const messages = ref<FlowLogMessage[]>([])
   const isOpen = ref(false)
-  const lastFinishEvent = ref<{ pid: string; time: number } | null>(null)
+  const lastFinishEvent = ref<{ pid: string; time: number; status: string } | null>(null)
+
+  /**
+   * The parser for the engine's event stream.
+   *
+   * shallowRef because the tracker owns mutable state internally and must not be
+   * turned into a deep reactive proxy — subscribe to its events instead.
+   */
+  const tracker = shallowRef<FlowTracker>(createFlowTracker())
 
   function getBaseURL(): string {
     const base = apiClient['baseURL'] ?? import.meta.env.VITE_API_BASE_URL ?? '/api'
@@ -40,12 +121,10 @@ export function useSocketIO() {
   }
 
   function getAuthToken(): string | null {
-    // Try to get token from apiClient's default headers
     const authHeader = apiClient['defaultHeaders']?.['Authorization'] as string | undefined
     if (authHeader?.startsWith('Bearer ')) {
       return authHeader.slice(7)
     }
-    // Fallback to localStorage
     return localStorage.getItem('inflow_auth_token')
   }
 
@@ -53,64 +132,76 @@ export function useSocketIO() {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
   }
 
-  function addMessage(msg: Omit<FlowLogMessage, 'id' | 'timestamp'>): void {
-    messages.value.push({
-      id: generateId(),
-      timestamp: Date.now(),
-      ...msg,
-    })
+  function pushMessage(msg: Omit<FlowLogMessage, 'id'>): void {
+    messages.value.push({ id: generateId(), ...msg })
+    if (messages.value.length > MAX_MESSAGES) {
+      messages.value.splice(0, messages.value.length - MAX_MESSAGES)
+    }
+  }
+
+  /** A local notice — not from the engine, so it has no raw event. */
+  function addMessage(msg: { level: LogLevel; message: string }): void {
+    pushMessage({ timestamp: Date.now(), ...msg })
   }
 
   function clearMessages(): void {
     messages.value = []
   }
 
-  function extractFinishPid(payload: unknown): string | null {
-    if (!payload || typeof payload !== 'object') return null
-    const obj = payload as Record<string, unknown>
+  // Every event the tracker accepts becomes a drawer line. Subscribing to
+  // `event` (rather than the socket) means lines arrive in seq order, already
+  // demultiplexed and validated.
+  tracker.value.on('event', (event) => {
+    pushMessage({
+      timestamp: event.ts,
+      level: event.level,
+      message: summarize(event),
+      event,
+      pid: event.pid,
+      seq: event.seq,
+      kind: event.kind,
+      src: event.src,
+      flow: event.flow,
+      nodeId: event.node,
+      nodeTitle: (event.detail as any)?.title,
+    })
+  })
 
-    // Case 1: top-level finish
-    if (obj.type === 'finish' && typeof obj.pid === 'string') {
-      return obj.pid
+  tracker.value.on('finish', ({ pid, status, at }) => {
+    lastFinishEvent.value = { pid, status, time: at }
+  })
+
+  tracker.value.on('gap', ({ pid, from, count }) => {
+    addMessage({
+      level: 'warn',
+      message: `Lost ${count} event${count === 1 ? '' : 's'} from #${from} (pid ${pid.slice(0, 8)}…)`,
+    })
+  })
+
+  tracker.value.on('skip', ({ reason, input }) => {
+    // A legacy event means the engine predates the v1 stream — worth saying
+    // plainly rather than silently showing nothing.
+    if (reason === 'legacy') {
+      addMessage({
+        level: 'warn',
+        message: 'Ignored a pre-v1 log event — this engine predates the current log format.',
+      })
+      return
     }
-
-    // Case 2: finish nested inside payload.message as an object
-    if (obj.message && typeof obj.message === 'object') {
-      const msg = obj.message as Record<string, unknown>
-      if (msg.type === 'finish' && typeof msg.pid === 'string') {
-        return msg.pid
-      }
+    // Connection banners and other non-event traffic are normal; only surface
+    // things that look like they were meant to be events.
+    if (reason === 'malformed' || reason === 'unsupported-version') {
+      addMessage({ level: 'warn', message: `Ignored an unusable event (${reason})` })
+      return
     }
-
-    // Case 3: finish nested inside payload.message as a JSON string
-    if (typeof obj.message === 'string') {
-      try {
-        const parsed = JSON.parse(obj.message)
-        if (parsed && typeof parsed === 'object' && parsed.type === 'finish' && typeof parsed.pid === 'string') {
-          return parsed.pid
-        }
-      } catch {
-        // Not JSON — ignore
-      }
+    if (typeof input === 'string' && input.length > 0) {
+      addMessage({ level: 'debug', message: input })
     }
-
-    return null
-  }
-
-  function checkForFinish(payload: unknown): void {
-    const pid = extractFinishPid(payload)
-    if (pid) {
-      lastFinishEvent.value = { pid, time: Date.now() }
-    }
-  }
+  })
 
   function connect(): void {
-    // Already connected — nothing to do.
     if (socket.value?.connected) return
-    // A connection attempt is already in flight — don't start another.
     if (state.value.connecting) return
-    // An existing socket that's disconnected — reuse it instead of creating a
-    // new one (otherwise the old socket is orphaned and we leak a connection).
     if (socket.value) {
       state.value.connecting = true
       state.value.error = null
@@ -129,14 +220,10 @@ export function useSocketIO() {
     state.value.connecting = true
     state.value.error = null
 
-    const socketURL = `${baseURL}`
-
-    const newSocket = io(socketURL, {
+    const newSocket = io(baseURL, {
       transports: ['websocket'],
       path: '/ws/dev-panel',
-      query: {
-        Authorization: token,
-      },
+      query: { Authorization: token },
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
@@ -153,6 +240,9 @@ export function useSocketIO() {
       state.value.connected = false
       state.value.connecting = false
       addMessage({ level: 'warn', message: `Disconnected: ${reason}` })
+      // A dropped connection means any hole in the stream will never be filled;
+      // don't leave processes stuck mid-flight behind it.
+      tracker.value.flush()
     })
 
     newSocket.on('connect_error', (err) => {
@@ -162,125 +252,10 @@ export function useSocketIO() {
       addMessage({ level: 'error', message: `Connection error: ${err.message}` })
     })
 
-    // Generic log message handler
-    newSocket.on('log', (payload: { level?: LogLevel; message: string; stage?: string; nodeId?: string; nodeTitle?: string; data?: unknown }) => {
-      checkForFinish(payload)
-      addMessage({
-        level: payload.level ?? 'info',
-        message: payload.message,
-        stage: payload.stage,
-        nodeId: payload.nodeId,
-        nodeTitle: payload.nodeTitle,
-        data: payload.data,
-      })
-    })
-
-    // Stage update handler
-    newSocket.on('stage', (payload: { stage: string; message: string; nodeId?: string; nodeTitle?: string; data?: unknown }) => {
-      checkForFinish(payload)
-      addMessage({
-        level: 'info',
-        message: payload.message,
-        stage: payload.stage,
-        nodeId: payload.nodeId,
-        nodeTitle: payload.nodeTitle,
-        data: payload.data,
-      })
-    })
-
-    // Notification handler
-    newSocket.on('notification', (payload: { level?: LogLevel; message: string; data?: unknown }) => {
-      checkForFinish(payload)
-      addMessage({
-        level: payload.level ?? 'info',
-        message: payload.message,
-        data: payload.data,
-      })
-    })
-
-    // Flow execution events
-    newSocket.on('flow:start', (payload: { flowId: string; message?: string }) => {
-      checkForFinish(payload)
-      addMessage({
-        level: 'success',
-        message: payload.message ?? `Flow started: ${payload.flowId}`,
-        stage: 'start',
-      })
-    })
-
-    newSocket.on('flow:end', (payload: { flowId: string; message?: string; success?: boolean }) => {
-      checkForFinish(payload)
-      addMessage({
-        level: payload.success === false ? 'error' : 'success',
-        message: payload.message ?? `Flow ended: ${payload.flowId}`,
-        stage: 'end',
-      })
-    })
-
-    // Node execution events
-    newSocket.on('node:start', (payload: { nodeId: string; nodeTitle?: string; message?: string }) => {
-      checkForFinish(payload)
-      addMessage({
-        level: 'info',
-        message: payload.message ?? `Node started: ${payload.nodeTitle ?? payload.nodeId}`,
-        stage: 'node-start',
-        nodeId: payload.nodeId,
-        nodeTitle: payload.nodeTitle,
-      })
-    })
-
-    newSocket.on('node:end', (payload: { nodeId: string; nodeTitle?: string; message?: string; success?: boolean }) => {
-      checkForFinish(payload)
-      addMessage({
-        level: payload.success === false ? 'error' : 'info',
-        message: payload.message ?? `Node ended: ${payload.nodeTitle ?? payload.nodeId}`,
-        stage: 'node-end',
-        nodeId: payload.nodeId,
-        nodeTitle: payload.nodeTitle,
-      })
-    })
-
-    // Dedicated handler for 'message' events (server sends logs via this event)
-    newSocket.on('message', (payload: { level?: LogLevel; message?: unknown; stage?: string; nodeId?: string; nodeTitle?: string; data?: unknown; type?: string; pid?: string }) => {
-      checkForFinish(payload)
-      const rawMsg = payload.message !== undefined ? payload.message : payload
-      const messageStr = typeof rawMsg === 'string' ? rawMsg : JSON.stringify(rawMsg, null, 2)
-      addMessage({
-        level: payload.level ?? 'info',
-        message: messageStr,
-        stage: payload.stage,
-        nodeId: payload.nodeId,
-        nodeTitle: payload.nodeTitle,
-        data: payload.data,
-      })
-    })
-
-    // Catch-all for unknown events (treat as log)
-    newSocket.onAny((eventName: string, ...args: unknown[]) => {
-      // Skip internal socket.io events and already handled events
-      const knownEvents = ['connect', 'disconnect', 'connect_error', 'log', 'stage', 'notification', 'flow:start', 'flow:end', 'node:start', 'node:end', 'message']
-      if (knownEvents.includes(eventName)) return
-
-      const payload = args[0] as Record<string, unknown> | undefined
-      checkForFinish(payload)
-      if (payload && typeof payload === 'object') {
-        const rawMsg = payload.message !== undefined ? payload.message : args[0]
-        const messageStr = typeof rawMsg === 'string' ? rawMsg : JSON.stringify(rawMsg, null, 2)
-        addMessage({
-          level: (payload.level as LogLevel) ?? 'info',
-          message: messageStr,
-          stage: payload.stage as string | undefined,
-          nodeId: payload.nodeId as string | undefined,
-          nodeTitle: payload.nodeTitle as string | undefined,
-          data: payload.data as object | undefined,
-        })
-      } else {
-        addMessage({
-          level: 'info',
-          message: `[${eventName}] ${JSON.stringify(args)}`,
-        })
-      }
-    })
+    // The engine's stream. inspector-api relays it verbatim, so everything the
+    // engine publishes arrives here and the tracker decides what is usable.
+    newSocket.on('message', (payload: unknown) => tracker.value.ingest(payload))
+    newSocket.on('log', (payload: unknown) => tracker.value.ingest(payload))
 
     socket.value = newSocket
     globalSocket = newSocket
@@ -309,7 +284,6 @@ export function useSocketIO() {
   }
 
   onUnmounted(() => {
-    // Only disconnect if this is the active socket instance
     if (socket.value && socket.value === globalSocket) {
       disconnect()
     }
@@ -321,6 +295,7 @@ export function useSocketIO() {
     messages,
     isOpen,
     lastFinishEvent,
+    tracker,
     connect,
     disconnect,
     toggle,

@@ -34,7 +34,7 @@ import { pluginJsonSchema, pluginUiSchema } from '../../schemas/pluginSchema'
 import { useApiMutation, useApiQuery } from '../../api/hooks.ts'
 import { apiClient } from '../../api/client.ts'
 import type { PaginatedResponse } from '../../api/types'
-import { useSocketIO, type FlowLogMessage } from '../../composables/useSocketIO.ts'
+import { useSocketIO } from '../../composables/useSocketIO.ts'
 import { useRunningProcesses } from '../../composables/useRunningProcesses.ts'
 import FlowLogDrawer from '../drawers/FlowLogDrawer.vue'
 import RunningProcessesPanel from './RunningProcessesPanel.vue'
@@ -509,7 +509,7 @@ function onNodeDragStop(dragEvent: any) {
 }
 
 // ---- Socket.IO Dev Panel Logs ----
-const { state: socketState, messages: logMessages, isOpen: showLogDrawer, connect: connectSocket, clearMessages, open: openLogDrawer, lastFinishEvent } = useSocketIO()
+const { state: socketState, messages: logMessages, isOpen: showLogDrawer, connect: connectSocket, clearMessages, open: openLogDrawer, tracker } = useSocketIO()
 
 // ---- Running Processes Tracking ----
 const { runningProcesses, addProcess, removeProcess } = useRunningProcesses()
@@ -518,76 +518,83 @@ const stoppingPids = ref<Set<string>>(new Set())
 // Track the active process PID so we know when the flow is running
 const currentPid = ref<string | null>(null)
 
-// Set of currently animated edge IDs (active route)
-const activeEdgeIds = ref<Set<string>>(new Set())
+// The run painted on the canvas. Outlives currentPid: when a process finishes
+// it stops executing, but the path it took stays on screen until the next run.
+const visualisedPid = ref<string | null>(null)
+
+// ---- Live flow visualisation ----
+//
+// Edge state is derived from the tracker rather than tracked alongside it: the
+// tracker already knows which edges were travelled and how each node stands, so
+// re-deriving is both simpler and impossible to get out of sync.
+
+const TRAVELLED_STROKE = '#aa3bff'
+const PRUNED_OPACITY = 0.25
+
+/** Coalesce redraws — a hot loop can emit hundreds of events per frame. */
+let redrawQueued = false
+function scheduleEdgeRefresh() {
+  if (redrawQueued) return
+  redrawQueued = true
+  requestAnimationFrame(() => {
+    redrawQueued = false
+    refreshEdgeVisuals()
+  })
+}
 
 /**
- * Extract edge IDs from a log message.
- * When a node goes inProgress, animate all inbound edges (edges that target
- * this node) — those are the edges the flow actually traveled through.
+ * Paint the canvas from the tracked process.
+ *
+ * An edge shows motion while control is in flight along it — travelled, with a
+ * target that hasn't settled yet. That falls out of the state, so motion stops
+ * on its own when the process finishes and every node has settled.
  */
-function extractEdgeIdsFromLog(msg: FlowLogMessage): string[] {
-  const edgeIds: string[] = []
-  try {
-    const parsed = JSON.parse(msg.message)
-    if (!parsed || typeof parsed !== 'object') return edgeIds
-
-    const logType = parsed.type
-    const info = parsed.info
-    const nodeId = parsed.node?.id
-
-    if (!nodeId || typeof nodeId !== 'string') return edgeIds
-
-    // Case 1: start event — animate outbound edges from the start node
-    if (logType === 'start') {
-      for (const edge of edges.value as Edge[]) {
-        if (edge.source === nodeId) {
-          edgeIds.push(edge.id)
-        }
-      }
-      return edgeIds
-    }
-
-    // Case 2: info inProgress — animate all inbound edges to this node
-    // (the edges that brought the flow here)
-    if (logType === 'info' && info?.status === 'inProgress') {
-      for (const edge of edges.value as Edge[]) {
-        if (edge.target === nodeId) {
-          edgeIds.push(edge.id)
-        }
-      }
-      return edgeIds
-    }
-  } catch {
-    // Not JSON or no node data — ignore
-  }
-  return edgeIds
-}
-
-/** Update edge animated state based on activeEdgeIds */
-function updateEdgeAnimations() {
-  const active = activeEdgeIds.value
+function refreshEdgeVisuals() {
+  const pid = visualisedPid.value
+  const state = pid ? tracker.value.state(pid) : undefined
   let changed = false
+
   for (const edge of edges.value as Edge[]) {
-    const shouldAnimate = active.has(edge.id)
-    if (edge.animated !== shouldAnimate) {
-      edge.animated = shouldAnimate
+    const tracked = state?.edges[edge.id]
+    const travelled = tracked?.taken === true
+    // Known to the engine but never followed: the rejected side of a branch.
+    const pruned = tracked !== undefined && !travelled
+
+    let animate = false
+    if (travelled && state) {
+      const target = state.nodes[`${tracked!.to.flow}:${tracked!.to.node}`]
+      animate = target?.status === 'pending' || target?.status === 'running'
+    }
+
+    const style = travelled
+      ? { stroke: TRAVELLED_STROKE, strokeWidth: 2 }
+      : pruned
+        ? { opacity: PRUNED_OPACITY }
+        : undefined
+
+    if (edge.animated !== animate) {
+      edge.animated = animate
+      changed = true
+    }
+    if (JSON.stringify(edge.style ?? null) !== JSON.stringify(style ?? null)) {
+      edge.style = style as any
       changed = true
     }
   }
+
   if (changed) {
-    // Trigger reactivity by reassigning
+    // VueFlow needs a new array identity to pick up per-edge changes.
     edges.value = [...edges.value]
   }
 }
 
-/** Reset all edge animations */
+/** Clear all run styling — back to a plain, un-run graph. */
 function resetEdgeAnimations() {
-  activeEdgeIds.value.clear()
   let changed = false
   for (const edge of edges.value as Edge[]) {
-    if (edge.animated) {
+    if (edge.animated || edge.style) {
       edge.animated = false
+      edge.style = undefined
       changed = true
     }
   }
@@ -596,38 +603,32 @@ function resetEdgeAnimations() {
   }
 }
 
-// Watch log messages to detect which edges are being traversed
-watch(
-  () => logMessages.value.length,
-  () => {
-    const msgs = logMessages.value
-    if (msgs.length === 0) return
-    // Only process the newest message
-    const latest = msgs[msgs.length - 1]
-    const edgeIds = extractEdgeIdsFromLog(latest)
-    if (edgeIds.length > 0) {
-      for (const eid of edgeIds) {
-        activeEdgeIds.value.add(eid)
-      }
-      updateEdgeAnimations()
-    }
-  }
-)
+// `move` carries the exact edge the engine took, so there is nothing to infer:
+// no guessing from inbound edges, and branches that were pruned stay dark.
+tracker.value.on('move', () => scheduleEdgeRefresh())
+tracker.value.on('node:enter', () => scheduleEdgeRefresh())
+tracker.value.on('node:exit', () => scheduleEdgeRefresh())
 
-// Watch for socket finish events — remove from running processes and mark flow as ended
-watch(lastFinishEvent, (evt) => {
-  if (evt) {
-    removeProcess(evt.pid)
-    if (currentPid.value && evt.pid === currentPid.value) {
-      currentPid.value = null
-    }
+// proc.finish is the authoritative end of a process — this is the only thing
+// that takes a row out of the running list.
+tracker.value.on('finish', ({ pid }) => {
+  removeProcess(pid)
+  if (stoppingPids.value.has(pid)) {
+    const next = new Set(stoppingPids.value)
+    next.delete(pid)
+    stoppingPids.value = next
   }
+  if (currentPid.value === pid) {
+    currentPid.value = null
+  }
+  // The path stays painted; every node has settled, so motion stops by itself.
+  scheduleEdgeRefresh()
 })
 
-// Reset animations only when a NEW flow starts
-watch(currentPid, (pid, oldPid) => {
+// Reset the canvas only when a NEW run starts.
+watch(visualisedPid, (pid, oldPid) => {
   if (pid && pid !== oldPid) {
-    activeEdgeIds.value.clear()
+    if (oldPid) tracker.value.reset(oldPid)
     resetEdgeAnimations()
   }
 })
@@ -701,6 +702,7 @@ async function handleStart() {
     const selectedResource = (responseData?.selected_resource ?? responseData?.data?.selected_resource ?? {}) as Record<string, any>
     if (pid) {
       currentPid.value = pid
+      visualisedPid.value = pid
       addProcess({
         pid,
         selectedResource,
