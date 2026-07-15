@@ -67,7 +67,6 @@ const renderers = [
 // Icon picker — icons come from real collections (mdi, lucide, heroicons,
 // brands) rendered via @iconify/vue. We store `icon.class` = collection id and
 // `icon.name` = icon name; `<Icon>` addresses them as `class:name`.
-const showIconPicker = ref(false)
 const iconSearch = ref('')
 const activeCollection = ref(DEFAULT_ICON_CLASS)
 
@@ -85,7 +84,25 @@ const activeIcons = computed(() => {
 function selectIcon(collectionId: string, name: string) {
   iconClass.value = collectionId
   iconName.value = name
-  showIconPicker.value = false
+}
+
+// The grid only lists a curated subset, so allow setting any Iconify id by hand
+// (e.g. "mdi:rocket-launch"). A bare name uses the active collection.
+const iconIdInput = ref(selectedIconId.value)
+
+watch(selectedIconId, (id) => {
+  if (id !== iconIdInput.value) iconIdInput.value = id
+})
+
+function applyIconId() {
+  const raw = iconIdInput.value.trim()
+  if (!raw) return
+  const idx = raw.indexOf(':')
+  const collection = idx > 0 ? raw.slice(0, idx).trim() : activeCollection.value
+  const name = idx > 0 ? raw.slice(idx + 1).trim() : raw
+  if (!collection || !name) return
+  iconClass.value = collection
+  iconName.value = name
 }
 
 // ---------------------------------------------------------------------------
@@ -522,6 +539,25 @@ const hasJsonErrors = computed(() => !!schemaError.value || !!uiSchemaError.valu
             </div>
             <div v-if="activeIcons.length === 0" class="icon-empty">No icons match “{{ iconSearch }}”.</div>
           </div>
+
+          <!-- The grid is a curated subset — allow any Iconify id by hand. -->
+          <div class="icon-manual">
+            <label class="icon-manual-label">
+              Icon id
+              <span class="icon-manual-hint">Not listed? Type any Iconify id, e.g. mdi:rocket-launch</span>
+            </label>
+            <div class="icon-manual-row">
+              <Icon :icon="selectedIconId" width="22" height="22" class="icon-manual-preview" />
+              <input
+                v-model="iconIdInput"
+                type="text"
+                class="icon-manual-input"
+                placeholder="collection:name"
+                spellcheck="false"
+                @input="applyIconId"
+              />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -805,55 +841,8 @@ const hasJsonErrors = computed(() => !!schemaError.value || !!uiSchemaError.valu
 }
 
 /* ---- Icon Picker ---- */
-.icon-picker-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.selected-icon {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--border, #e5e4e7);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color 0.15s;
-  color: var(--accent, #aa3bff);
-}
-
-.selected-icon:hover {
-  border-color: var(--accent, #aa3bff);
-}
-
-.icon-name {
-  font-size: 13px;
-  color: var(--text-h, #08060d);
-  font-weight: 500;
-}
-
-.pick-icon-btn {
-  padding: 6px 12px;
-  border: 1px solid var(--border, #e5e4e7);
-  border-radius: 6px;
-  background: var(--bg, #fff);
-  color: var(--text-h, #08060d);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.pick-icon-btn:hover {
-  border-color: var(--accent, #aa3bff);
-  color: var(--accent, #aa3bff);
-}
-
 .icon-picker {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border, #e5e4e7);
+  margin-top: 4px;
 }
 
 .icon-collections {
@@ -919,6 +908,57 @@ const hasJsonErrors = computed(() => !!schemaError.value || !!uiSchemaError.valu
   text-align: center;
   font-size: 12px;
   color: var(--text, #6b6375);
+}
+
+.icon-manual {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #e5e4e7);
+}
+
+.icon-manual-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-h, #08060d);
+  margin-bottom: 8px;
+}
+
+.icon-manual-hint {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text, #6b6375);
+  margin-top: 2px;
+}
+
+.icon-manual-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.icon-manual-preview {
+  flex-shrink: 0;
+  color: var(--accent, #aa3bff);
+}
+
+.icon-manual-input {
+  flex: 1;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: var(--mono, monospace);
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 6px;
+  background: var(--bg, #fff);
+  color: var(--text-h, #08060d);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.icon-manual-input:focus {
+  border-color: var(--accent, #aa3bff);
+  box-shadow: 0 0 0 2px var(--accent-bg, rgba(170, 59, 255, 0.2));
 }
 
 .icon-option {
