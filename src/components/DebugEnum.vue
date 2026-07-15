@@ -7,7 +7,7 @@ import {
   InflowLayoutRenderer,
   inflowControlTester,
   inflowLayoutTester,
-} from '@inflowenger/inflow-ui'
+} from '@inflowenger/plugin-form-builder'
 
 const renderers = [
   { tester: inflowControlTester, renderer: markRaw(InflowControlRenderer) },

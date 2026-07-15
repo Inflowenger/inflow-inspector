@@ -42,7 +42,6 @@ cd "$SRC_DIR"
 echo "[entrypoint] installing deps"
 pnpm install --frozen-lockfile
 echo "[entrypoint] building SPA"
-pnpm --filter @inflowenger/inflow-ui build
 pnpm build
 echo "[entrypoint] serving dist/ on :$PORT"
 exec serve -s -n dist  -l "$PORT"

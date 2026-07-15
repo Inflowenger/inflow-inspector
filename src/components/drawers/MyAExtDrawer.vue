@@ -8,7 +8,7 @@ import {
   InflowLayoutRenderer,
   inflowControlTester,
   inflowLayoutTester
-} from '@inflowenger/inflow-ui'
+} from '@inflowenger/plugin-form-builder'
 
 interface ExtensionParams {
   schema?: Record<string, any>

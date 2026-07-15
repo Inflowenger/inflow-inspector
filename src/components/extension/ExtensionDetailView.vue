@@ -16,7 +16,7 @@ import {
   InflowLayoutRenderer,
   inflowControlTester,
   inflowLayoutTester
-} from '@inflowenger/inflow-ui'
+} from '@inflowenger/plugin-form-builder'
 
 const props = defineProps<{
   id?: string

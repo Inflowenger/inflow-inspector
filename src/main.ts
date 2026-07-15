@@ -5,8 +5,8 @@ import router from './router'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/controls/dist/style.css'
 import '@jsonforms/vue-vanilla/vanilla.css'
-import '@inflowenger/inflow-ui/style.css'
-import { InflowUiPlugin, createInflowUi } from '@inflowenger/inflow-ui'
+import '@inflowenger/plugin-form-builder/style.css'
+import { InflowUiPlugin, createInflowUi } from '@inflowenger/plugin-form-builder'
 import { mergeStyles, defaultStyles } from '@jsonforms/vue-vanilla'
 
 const app = createApp(App)
@@ -16,7 +16,7 @@ app.use(router)
 // Token-based theme for the vanilla JSON Forms widgets.
 // We only map class names here; the actual look lives in style.css and uses the
 // app's design tokens (--bg, --border, --accent, ...), so forms inherit the app
-// theme (incl. dark mode) and inflow-ui stays design-system-agnostic.
+// theme (incl. dark mode) and plugin-form-builder stays design-system-agnostic.
 // mergeStyles keeps the structural vanilla classes and appends ours.
 const inflowFormStyles = mergeStyles(defaultStyles, {
   control: {

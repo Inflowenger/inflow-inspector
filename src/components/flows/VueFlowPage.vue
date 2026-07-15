@@ -13,7 +13,7 @@ import {
   InflowLayoutRenderer,
   inflowControlTester,
   inflowLayoutTester
-} from '@inflowenger/inflow-ui'
+} from '@inflowenger/plugin-form-builder'
 import NodePalette from './NodePalette.vue'
 import CustomNode from '../nodes/CustomNode.vue'
 import StartNode from '../nodes/StartNode.vue'

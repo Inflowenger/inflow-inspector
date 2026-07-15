@@ -1,5 +1,6 @@
 allowBuilds:
   esbuild: true
   vue-demi: true
-packages:
-  - 'packages/*'
+minimumReleaseAgeExclude:
+  - '@inflowenger/flow-trace@0.1.1'
+  - '@inflowenger/plugin-form-builder@0.1.1'
