@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue'
+import type { ProcEvent } from '@inflowenger/flow-trace'
 import type { FlowLogMessage, LogLevel } from '../../composables/useSocketIO'
 
 const props = defineProps<{
@@ -7,12 +8,20 @@ const props = defineProps<{
   messages: FlowLogMessage[]
   connected: boolean
   connecting: boolean
+  /** The process the canvas is painting. Null when nothing is focused. */
+  focusedPid?: string | null
+  /** True while a recorded route is being played back onto the canvas. */
+  replaying?: boolean
+  replayProgress?: { index: number; total: number } | null
 }>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
   (e: 'clear'): void
   (e: 'reconnect'): void
+  (e: 'update:focusedPid', pid: string | null): void
+  (e: 'replay', payload: { pid: string; events: ProcEvent[] }): void
+  (e: 'stop-replay'): void
 }>()
 
 const showDrawer = computed({
@@ -78,8 +87,56 @@ const availableKinds = computed(() => {
   return [...kinds].sort()
 })
 
+/**
+ * Processes seen in this stream.
+ *
+ * The engine broadcasts every process it runs, so several can be interleaved
+ * here at once — picking one is how you read a single run's story.
+ */
+const availablePids = computed(() => {
+  const pids = new Map<string, number>()
+  for (const m of props.messages) {
+    if (m.pid) pids.set(m.pid, (pids.get(m.pid) ?? 0) + 1)
+  }
+  return [...pids.entries()].map(([pid, count]) => ({ pid, count }))
+})
+
+/**
+ * Selecting a process focuses it: its lines are the only ones shown, and the
+ * canvas paints its route. 'all' leaves the canvas on whatever it was showing.
+ */
+const pidFilter = computed({
+  get: () => props.focusedPid ?? 'all',
+  set: (v: string) => emit('update:focusedPid', v === 'all' ? null : v),
+})
+
+/** The focused process's events, in engine order — what a replay walks. */
+const focusedEvents = computed<ProcEvent[]>(() => {
+  const pid = props.focusedPid
+  if (!pid) return []
+  return props.messages
+    .filter((m) => m.event && m.pid === pid)
+    .map((m) => m.event!)
+    .sort((a, b) => a.seq - b.seq)
+})
+
+const canReplay = computed(() => focusedEvents.value.length > 0)
+
+function toggleReplay() {
+  if (props.replaying) {
+    emit('stop-replay')
+    return
+  }
+  if (!props.focusedPid || !canReplay.value) return
+  emit('replay', { pid: props.focusedPid, events: focusedEvents.value })
+}
+
 const filteredMessages = computed(() => {
   let result = props.messages
+
+  if (props.focusedPid) {
+    result = result.filter((m) => m.pid === props.focusedPid)
+  }
 
   if (filterLevel.value !== 'all') {
     result = result.filter((m) => m.level === filterLevel.value)
@@ -106,7 +163,7 @@ const filteredMessages = computed(() => {
 })
 
 const levelCounts = computed(() => {
-  const counts: Record<string, number> = { all: props.messages.length, info: 0, warn: 0, error: 0, debug: 0, success: 0 }
+  const counts: Record<string, number> = { all: props.messages.length, debug: 0, info: 0, warn: 0, error: 0 }
   for (const m of props.messages) {
     counts[m.level] = (counts[m.level] ?? 0) + 1
   }
@@ -127,7 +184,6 @@ function levelIcon(level: LogLevel): string {
     case 'warn': return '⚠'
     case 'error': return '✕'
     case 'debug': return '◆'
-    case 'success': return '✓'
     default: return '•'
   }
 }
@@ -231,6 +287,46 @@ async function copyAll() {
         </div>
 
         <div class="log-header-actions">
+          <!-- Process: the engine broadcasts every run, so several interleave here -->
+          <select
+            v-if="availablePids.length > 0"
+            v-model="pidFilter"
+            class="log-filter"
+            title="Focus one process — filters these logs and paints its route"
+          >
+            <option value="all">
+              All processes{{ availablePids.length > 1 ? ` (${availablePids.length})` : '' }}
+            </option>
+            <option v-for="p in availablePids" :key="p.pid" :value="p.pid">
+              {{ p.pid.slice(0, 8) }}… ({{ p.count }})
+            </option>
+          </select>
+
+          <!-- Walk the focused run's events back onto the canvas -->
+          <button
+            v-if="availablePids.length > 0"
+            class="replay-btn"
+            :class="{ active: replaying }"
+            :disabled="!canReplay && !replaying"
+            :title="
+              replaying
+                ? 'Stop replay'
+                : canReplay
+                  ? 'Replay this route on the diagram'
+                  : 'Select a process to replay its route'
+            "
+            @click="toggleReplay"
+          >
+            <svg v-if="!replaying" width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="5" width="4" height="14" />
+              <rect x="14" y="5" width="4" height="14" />
+            </svg>
+            <span>{{ replaying && replayProgress ? `${replayProgress.index}/${replayProgress.total}` : 'Route' }}</span>
+          </button>
+
           <!-- Level: severity only -->
           <select v-model="filterLevel" class="log-filter" title="Filter by severity">
             <option value="all">All levels ({{ levelCounts.all }})</option>
@@ -622,17 +718,6 @@ async function copyAll() {
   flex-shrink: 0;
 }
 
-.log-stage {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--accent-bg, rgba(170, 59, 255, 0.1));
-  color: var(--accent, #aa3bff);
-  white-space: nowrap;
-}
 
 .log-node {
   font-size: 11px;
@@ -650,7 +735,9 @@ async function copyAll() {
   margin-top: 6px;
   margin-left: 52px;
   padding: 8px 12px;
-  background: #f8f9fa;
+  /* Themed: --text-h flips to near-white in dark mode, so a hardcoded light
+     surface here left the JSON invisible against it. */
+  background: var(--code-bg, #f4f3ec);
   border-radius: 6px;
   border: 1px solid var(--border, #e5e4e7);
   overflow-x: auto;
@@ -661,6 +748,8 @@ async function copyAll() {
   font-size: 11px;
   line-height: 1.4;
   color: var(--text-h, #08060d);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Level colors */
@@ -696,13 +785,6 @@ async function copyAll() {
   color: #7c3aed;
 }
 
-.level-success {
-  border-left-color: #22c55e;
-}
-.level-success .log-level-icon {
-  background: #dcfce7;
-  color: #16a34a;
-}
 
 /* Transitions */
 .log-drawer-fade-enter-active,
@@ -736,6 +818,39 @@ async function copyAll() {
   color: #e74c3c;
   font-size: 10px;
   font-weight: 600;
+}
+
+/* Replay control */
+.replay-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text, #6b6375);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.replay-btn:hover:not(:disabled) {
+  border-color: var(--accent, #aa3bff);
+  color: var(--accent, #aa3bff);
+}
+
+.replay-btn.active {
+  background: var(--accent, #aa3bff);
+  border-color: var(--accent, #aa3bff);
+  color: #fff;
+}
+
+.replay-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Pretty / JSON switch */
@@ -795,6 +910,9 @@ async function copyAll() {
   white-space: nowrap;
 }
 
+/* The badge backgrounds are translucent, so they take the page's colour behind
+   them. That means the text colour has to follow the theme too — a fixed dark
+   ink here disappears on a dark surface. */
 .kind-proc {
   background: rgba(170, 59, 255, 0.14);
   color: #8a2bd6;
@@ -802,12 +920,12 @@ async function copyAll() {
 
 .kind-node {
   background: rgba(52, 152, 219, 0.14);
-  color: #2478b5;
+  color: #1f6699;
 }
 
 .kind-route {
   background: rgba(46, 204, 113, 0.16);
-  color: #1e8449;
+  color: #176b3a;
 }
 
 .kind-log {
@@ -817,7 +935,34 @@ async function copyAll() {
 
 .kind-other {
   background: rgba(241, 196, 15, 0.18);
-  color: #9a7d0a;
+  color: #7d6508;
+}
+
+@media (prefers-color-scheme: dark) {
+  .kind-proc {
+    background: rgba(192, 132, 252, 0.18);
+    color: #d8b4fe;
+  }
+
+  .kind-node {
+    background: rgba(96, 165, 250, 0.18);
+    color: #93c5fd;
+  }
+
+  .kind-route {
+    background: rgba(52, 211, 153, 0.18);
+    color: #6ee7b7;
+  }
+
+  .kind-log {
+    background: rgba(156, 163, 175, 0.18);
+    color: #d1d5db;
+  }
+
+  .kind-other {
+    background: rgba(250, 204, 21, 0.18);
+    color: #fde68a;
+  }
 }
 
 .log-src {
@@ -858,7 +1003,7 @@ async function copyAll() {
 .log-raw-item {
   position: relative;
   padding: 4px 10px;
-  border-bottom: 1px solid var(--border-soft, rgba(0, 0, 0, 0.04));
+  border-bottom: 1px solid var(--border, #e5e4e7);
 }
 
 .log-raw-item pre {
@@ -881,5 +1026,26 @@ async function copyAll() {
   top: 4px;
   right: 6px;
   margin: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .log-raw-item.level-error pre {
+    /* #c0392b is unreadable on a dark surface. */
+    color: #f87171;
+  }
+
+  .error-badge {
+    background: rgba(248, 113, 113, 0.16);
+    color: #f87171;
+  }
+
+  .log-item.expanded {
+    /* A black wash is invisible on a dark page; lift instead. */
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .log-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
 }
 </style>

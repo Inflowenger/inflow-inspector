@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted, markRaw } from 'vue'
+import { ref, watch, nextTick, computed, onMounted, onUnmounted, markRaw, shallowRef } from 'vue'
+import { createFlowTracker, type FlowTracker, type ProcEvent, type ProcessState } from '@inflowenger/flow-trace'
 import { useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, type Node, type Edge, type Connection, MarkerType, Panel } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -549,9 +550,22 @@ function scheduleEdgeRefresh() {
  * target that hasn't settled yet. That falls out of the state, so motion stops
  * on its own when the process finishes and every node has settled.
  */
-function refreshEdgeVisuals() {
+/**
+ * The process the canvas is painting.
+ *
+ * A replay takes over the canvas while it runs — it has its own tracker fed at
+ * its own pace, so live events for other processes can keep arriving without
+ * fighting it for the diagram.
+ */
+function activeState(): ProcessState | undefined {
+  const session = replaySession.value
+  if (session) return session.tracker.state(session.pid)
   const pid = visualisedPid.value
-  const state = pid ? tracker.value.state(pid) : undefined
+  return pid ? tracker.value.state(pid) : undefined
+}
+
+function refreshEdgeVisuals() {
+  const state = activeState()
   let changed = false
 
   for (const edge of edges.value as Edge[]) {
@@ -625,13 +639,74 @@ tracker.value.on('finish', ({ pid }) => {
   scheduleEdgeRefresh()
 })
 
-// Reset the canvas only when a NEW run starts.
-watch(visualisedPid, (pid, oldPid) => {
-  if (pid && pid !== oldPid) {
-    if (oldPid) tracker.value.reset(oldPid)
-    resetEdgeAnimations()
-  }
+// Repaint when the focused process changes — each run has its own route.
+watch(visualisedPid, () => {
+  stopReplay()
+  resetEdgeAnimations()
+  scheduleEdgeRefresh()
 })
+
+// ---- Route replay ----
+//
+// Walks a recorded run's events back through a fresh tracker, one at a time, so
+// the diagram redraws the route in the order the engine actually took it.
+// Reading the events rather than re-deriving from the graph means what you see
+// is exactly what happened, including branches not taken.
+
+const REPLAY_STEP_MS = 140
+
+const replaySession = shallowRef<{ pid: string; tracker: FlowTracker } | null>(null)
+const replayProgress = ref<{ index: number; total: number } | null>(null)
+let replayTimer: ReturnType<typeof setTimeout> | null = null
+
+const isReplaying = computed(() => replaySession.value !== null)
+
+function stopReplay() {
+  if (replayTimer !== null) {
+    clearTimeout(replayTimer)
+    replayTimer = null
+  }
+  if (replaySession.value) {
+    replaySession.value = null
+    replayProgress.value = null
+    // Hand the canvas back to the live tracker.
+    scheduleEdgeRefresh()
+  }
+}
+
+function startReplay({ pid, events }: { pid: string; events: ProcEvent[] }) {
+  stopReplay()
+  if (events.length === 0) return
+
+  // A tracker of its own, so replaying never disturbs the live state.
+  replaySession.value = { pid, tracker: createFlowTracker({ pid, reorderWindow: Infinity }) }
+  replayProgress.value = { index: 0, total: events.length }
+  resetEdgeAnimations()
+
+  let i = 0
+  const step = () => {
+    const session = replaySession.value
+    if (!session) return // stopped mid-flight
+
+    session.tracker.ingest(events[i])
+    i++
+    replayProgress.value = { index: i, total: events.length }
+    refreshEdgeVisuals()
+
+    if (i < events.length) {
+      replayTimer = setTimeout(step, REPLAY_STEP_MS)
+      return
+    }
+    // Finished: leave the completed route on screen and release the canvas.
+    replayTimer = setTimeout(() => {
+      replaySession.value = null
+      replayProgress.value = null
+    }, 600)
+  }
+  step()
+}
+
+onUnmounted(() => stopReplay())
 
 // Auto-connect socket when log drawer is opened
 watch(showLogDrawer, (open) => {
@@ -1044,11 +1119,16 @@ async function handleStopProcess(pid: string) {
       <!-- Flow Log Drawer (Bottom) -->
       <FlowLogDrawer
         v-model="showLogDrawer"
+        v-model:focused-pid="visualisedPid"
         :messages="logMessages"
         :connected="socketState.connected"
         :connecting="socketState.connecting"
+        :replaying="isReplaying"
+        :replay-progress="replayProgress"
         @clear="clearMessages"
         @reconnect="connectSocket"
+        @replay="startReplay"
+        @stop-replay="stopReplay"
       />
 
       <!-- Running Processes Panel (Bottom Left) -->

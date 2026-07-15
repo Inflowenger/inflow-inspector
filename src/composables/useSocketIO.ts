@@ -8,7 +8,7 @@ import {
 } from '@inflowenger/flow-trace'
 import { apiClient } from '../api/client'
 
-export type LogLevel = Level | 'success'
+export type LogLevel = Level
 
 /**
  * One line in the log drawer.
@@ -105,7 +105,6 @@ export function useSocketIO() {
   })
   const messages = ref<FlowLogMessage[]>([])
   const isOpen = ref(false)
-  const lastFinishEvent = ref<{ pid: string; time: number; status: string } | null>(null)
 
   /**
    * The parser for the engine's event stream.
@@ -165,10 +164,6 @@ export function useSocketIO() {
       nodeId: event.node,
       nodeTitle: (event.detail as any)?.title,
     })
-  })
-
-  tracker.value.on('finish', ({ pid, status, at }) => {
-    lastFinishEvent.value = { pid, status, time: at }
   })
 
   tracker.value.on('gap', ({ pid, from, count }) => {
@@ -294,7 +289,6 @@ export function useSocketIO() {
     state,
     messages,
     isOpen,
-    lastFinishEvent,
     tracker,
     connect,
     disconnect,
