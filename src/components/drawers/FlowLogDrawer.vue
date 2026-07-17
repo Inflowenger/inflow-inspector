@@ -80,10 +80,22 @@ const filterKind = ref<string>('all')
 const expanded = ref<Set<string>>(new Set())
 const copiedId = ref<string | null>(null)
 
+/**
+ * The kind a row is badged and filtered by. A plugin sub-classifies some `log`
+ * events (`progress` frames, `protocol` traces); those read as their own
+ * category rather than a generic "log", so the category wins when present.
+ */
+function displayKind(msg: FlowLogMessage): string | undefined {
+  return msg.category ?? msg.kind
+}
+
 /** Kinds actually present, so the filter only ever offers real options. */
 const availableKinds = computed(() => {
   const kinds = new Set<string>()
-  for (const m of props.messages) if (m.kind) kinds.add(m.kind)
+  for (const m of props.messages) {
+    const k = displayKind(m)
+    if (k) kinds.add(k)
+  }
   return [...kinds].sort()
 })
 
@@ -143,7 +155,7 @@ const filteredMessages = computed(() => {
   }
 
   if (filterKind.value !== 'all') {
-    result = result.filter((m) => m.kind === filterKind.value)
+    result = result.filter((m) => displayKind(m) === filterKind.value)
   }
 
   if (searchQuery.value.trim()) {
@@ -152,6 +164,7 @@ const filteredMessages = computed(() => {
       (m) =>
         m.message.toLowerCase().includes(q) ||
         m.kind?.toLowerCase().includes(q) ||
+        m.category?.toLowerCase().includes(q) ||
         m.src?.toLowerCase().includes(q) ||
         m.nodeTitle?.toLowerCase().includes(q) ||
         m.nodeId?.toLowerCase().includes(q) ||
@@ -204,8 +217,20 @@ function kindClass(kind?: string): string {
   if (kind === 'proc.start' || kind === 'proc.finish') return 'kind-proc'
   if (kind === 'edge.select' || kind === 'flow.jump') return 'kind-route'
   if (kind.startsWith('node.')) return 'kind-node'
+  // Plugin-node log categories — a related pair, distinct from a generic log.
+  if (kind === 'progress') return 'kind-progress'
+  if (kind === 'protocol') return 'kind-protocol'
   if (kind === 'log') return 'kind-log'
   return 'kind-other'
+}
+
+/**
+ * The protocol family a row belongs to, shown as a small tag next to the kind.
+ * progress/protocol rows come from a plugin node over inflowV1, so tagging them
+ * lets the pair read as one family however you scan. Absent for everything else.
+ */
+function groupTag(msg: FlowLogMessage): string | undefined {
+  return msg.category === 'progress' || msg.category === 'protocol' ? 'inflowV1' : undefined
 }
 
 function nodeLabel(msg: FlowLogMessage): string {
@@ -457,7 +482,8 @@ async function copyAll() {
                 {{ msg.seq !== undefined ? `#${msg.seq}` : '' }}
               </span>
               <span class="log-level-icon" :class="levelClass(msg.level)">{{ levelIcon(msg.level) }}</span>
-              <span v-if="msg.kind" class="log-kind" :class="kindClass(msg.kind)">{{ kindLabel(msg.kind) }}</span>
+              <span v-if="displayKind(msg)" class="log-kind" :class="kindClass(displayKind(msg))">{{ kindLabel(displayKind(msg)) }}</span>
+              <span v-if="groupTag(msg)" class="log-proto-tag" :title="`${groupTag(msg)} plugin protocol`">{{ groupTag(msg) }}</span>
               <span v-if="msg.src && msg.src !== 'rt'" class="log-src" :title="`emitted by ${msg.src}`">{{ msg.src }}</span>
               <span v-if="msg.nodeId" class="log-node" :title="`${msg.flow} / ${msg.nodeId}`">{{ nodeLabel(msg) }}</span>
               <span class="log-message">{{ msg.message }}</span>
@@ -933,9 +959,35 @@ async function copyAll() {
   color: #6b6375;
 }
 
+/* Plugin-node categories — a shared teal family so progress + protocol read as
+   one group, brighter for the live progress frame, muted for the trace. */
+.kind-progress {
+  background: rgba(20, 184, 166, 0.18);
+  color: #0f766e;
+}
+
+.kind-protocol {
+  background: rgba(20, 184, 166, 0.1);
+  color: #0d9488;
+}
+
 .kind-other {
   background: rgba(241, 196, 15, 0.18);
   color: #7d6508;
+}
+
+/* inflowV1 group tag — a quiet pill marking the plugin-protocol pair. */
+.log-proto-tag {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  background: rgba(20, 184, 166, 0.12);
+  color: #0d9488;
+  border: 1px solid rgba(20, 184, 166, 0.3);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -959,9 +1011,25 @@ async function copyAll() {
     color: #d1d5db;
   }
 
+  .kind-progress {
+    background: rgba(45, 212, 191, 0.2);
+    color: #5eead4;
+  }
+
+  .kind-protocol {
+    background: rgba(45, 212, 191, 0.12);
+    color: #2dd4bf;
+  }
+
   .kind-other {
     background: rgba(250, 204, 21, 0.18);
     color: #fde68a;
+  }
+
+  .log-proto-tag {
+    background: rgba(45, 212, 191, 0.14);
+    color: #5eead4;
+    border-color: rgba(45, 212, 191, 0.32);
   }
 }
 

@@ -28,6 +28,12 @@ export interface FlowLogMessage {
   pid?: string
   seq?: number
   kind?: string
+  /**
+   * Sub-kind of a `log` event, from `detail.category` — `progress` (a job frame)
+   * or `protocol` (an inflowV1 transport trace). Absent for plain logs and for
+   * every non-log kind. Drives the badge so these read as their own category.
+   */
+  category?: string
   src?: string
   flow?: string
   nodeId?: string
@@ -88,8 +94,23 @@ function summarize(event: ProcEvent): string {
       return `Jumped to ${shortNode(d.to?.flow, d.to?.node)}${
         d.ret ? `, returns at ${shortNode(d.ret.flow, d.ret.node)}` : ''
       }`
-    case 'log':
+    case 'log': {
+      // A plugin sub-classifies some logs (see FlowLogMessage.category). A
+      // progress frame has no `msg` — build one from percent + frame so the
+      // line isn't blank; a protocol trace has a `msg` but reads better with
+      // its proto and subject.
+      if (d.category === 'progress') {
+        const frame = (d.frame ?? {}) as { title?: string; content?: string }
+        const label = [frame.title, frame.content].filter(Boolean).join(': ')
+        const pct = `${d.percent ?? 0}%`
+        return label ? `${pct} — ${label}` : pct
+      }
+      if (d.category === 'protocol') {
+        const head = [d.proto, d.msg].filter(Boolean).join(' · ')
+        return d.subject ? `${head} → ${d.subject}` : head
+      }
       return String(d.msg ?? '')
+    }
     default:
       // An unknown kind from a newer engine — show it rather than hide it.
       return `${event.kind}`
@@ -159,6 +180,7 @@ export function useSocketIO() {
       pid: event.pid,
       seq: event.seq,
       kind: event.kind,
+      category: event.kind === 'log' ? ((event.detail as any)?.category as string | undefined) : undefined,
       src: event.src,
       flow: event.flow,
       nodeId: event.node,
