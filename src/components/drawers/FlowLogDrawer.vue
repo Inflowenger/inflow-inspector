@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, watch, watchEffect } from 'vue'
 import type { ProcEvent } from '@inflowenger/flow-trace'
-import type { FlowLogMessage, LogLevel } from '../../composables/useSocketIO'
+import type { FlowLogMessage, LogLevel, RouteEnd } from '../../composables/useSocketIO'
+import { useFlowGraphs } from '../../composables/useFlowGraphs'
+import LogRefText from './LogRefText.vue'
 
 const props = defineProps<{
   modelValue: boolean
@@ -28,6 +30,9 @@ const showDrawer = computed({
   get: () => props.modelValue,
   set: (val) => emit('update:modelValue', val),
 })
+
+/** Ids → titles. The stream names nodes and edges only by id. */
+const graphs = useFlowGraphs()
 
 const drawerHeight = ref(280)
 const isResizing = ref(false)
@@ -143,6 +148,20 @@ function toggleReplay() {
   emit('replay', { pid: props.focusedPid, events: focusedEvents.value })
 }
 
+/** Every node id a routing decision names, lowercased for search. */
+function routeIds(msg: FlowLogMessage): string[] {
+  if (!msg.route) return []
+  return [msg.route.from, ...msg.route.taken, ...msg.route.pruned].map((e) => e.id.toLowerCase())
+}
+
+/** The same ends by the names the row shows — what someone actually types. */
+function routeNames(msg: FlowLogMessage): string[] {
+  if (!msg.route) return []
+  return [msg.route.from, ...msg.route.taken, ...msg.route.pruned]
+    .map((e) => graphs.node(e.flow, e.id)?.title?.toLowerCase())
+    .filter((name): name is string => !!name)
+}
+
 const filteredMessages = computed(() => {
   let result = props.messages
 
@@ -168,7 +187,14 @@ const filteredMessages = computed(() => {
         m.src?.toLowerCase().includes(q) ||
         m.nodeTitle?.toLowerCase().includes(q) ||
         m.nodeId?.toLowerCase().includes(q) ||
-        m.flow?.toLowerCase().includes(q),
+        m.flow?.toLowerCase().includes(q) ||
+        // The title the row actually shows comes from the graph — searching for
+        // "Retrieve" has to find it, not just the id behind it.
+        (m.nodeId ? graphs.node(m.flow, m.nodeId)?.title.toLowerCase().includes(q) : false) ||
+        routeNames(m).some((name) => name.includes(q)) ||
+        // A route's node ids are only in the raw event, but searching for the
+        // node you are chasing has to find the decisions that mention it.
+        routeIds(m).some((id) => id.includes(q)),
     )
   }
 
@@ -208,7 +234,7 @@ function levelClass(level: LogLevel): string {
 /** Short label for the kind badge — the `node.`/`proc.` prefix is just noise. */
 function kindLabel(kind?: string): string {
   if (!kind) return ''
-  return kind.replace(/^(node|proc|edge|flow)\./, '')
+  return kind.replace(/^(node|proc|edge|flow|dep)\./, '')
 }
 
 /** Group kinds by what they mean, so the badge colour carries information. */
@@ -220,6 +246,10 @@ function kindClass(kind?: string): string {
   // Plugin-node log categories — a related pair, distinct from a generic log.
   if (kind === 'progress') return 'kind-progress'
   if (kind === 'protocol') return 'kind-protocol'
+  // A join parked on its inbound branches vs. one released: the pair reads as a
+  // state change, so colour it as one — amber waiting, green through.
+  if (kind === 'dep.wait') return 'kind-dep-wait'
+  if (kind === 'dep.ready') return 'kind-dep-ready'
   if (kind === 'log') return 'kind-log'
   return 'kind-other'
 }
@@ -235,8 +265,44 @@ function groupTag(msg: FlowLogMessage): string | undefined {
 
 function nodeLabel(msg: FlowLogMessage): string {
   if (!msg.nodeId) return ''
-  return msg.nodeTitle ? `${msg.nodeTitle} · ${msg.nodeId}` : msg.nodeId
+  const title = graphs.node(msg.flow, msg.nodeId)?.title ?? msg.nodeTitle
+  return title ? `${title} · ${msg.nodeId}` : msg.nodeId
 }
+
+/**
+ * A route end's display name — the title the canvas draws, or the id when
+ * nothing named it. Never blank: an unnamed hop still has to be identifiable.
+ *
+ * The stream carries ids only, so every name here comes from the saved graph;
+ * a flow still loading (or since deleted) simply shows ids.
+ */
+function endName(end: RouteEnd): string {
+  return graphs.node(end.flow, end.id)?.title || end.id
+}
+
+/** The tags on the edge this branch leaves by — its label on the canvas. */
+function endEdgeTags(end: RouteEnd): string {
+  if (end.tags.length > 0) return end.tags.join(', ')
+  const tags = end.edgeId ? (graphs.edge(end.flow, end.edgeId)?.tags ?? []) : []
+  return tags.join(', ')
+}
+
+/** The id is what you grep the raw JSON for, so keep it a hover away. */
+function endTitle(end: RouteEnd, prefix = ''): string {
+  const tags = endEdgeTags(end)
+  return `${prefix}${end.id}${tags ? ` [${tags}]` : ''}${end.edgeId ? ` · ${end.edgeId}` : ''}`
+}
+
+// Names come from the saved graph, so pull in every flow the visible rows
+// mention — lazily, and only once per flow.
+watchEffect(() => {
+  for (const msg of filteredMessages.value) {
+    graphs.ensure(msg.flow)
+    for (const end of [...(msg.route?.taken ?? []), ...(msg.route?.pruned ?? [])]) {
+      graphs.ensure(end.flow)
+    }
+  }
+})
 
 function rawJson(msg: FlowLogMessage): string {
   return msg.event ? JSON.stringify(msg.event, null, 2) : JSON.stringify({ message: msg.message }, null, 2)
@@ -486,7 +552,48 @@ async function copyAll() {
               <span v-if="groupTag(msg)" class="log-proto-tag" :title="`${groupTag(msg)} plugin protocol`">{{ groupTag(msg) }}</span>
               <span v-if="msg.src && msg.src !== 'rt'" class="log-src" :title="`emitted by ${msg.src}`">{{ msg.src }}</span>
               <span v-if="msg.nodeId" class="log-node" :title="`${msg.flow} / ${msg.nodeId}`">{{ nodeLabel(msg) }}</span>
-              <span class="log-message">{{ msg.message }}</span>
+
+              <!-- A routing decision reads as the route it took, not a sentence.
+                   The source is already on the row as the node chip, so this
+                   picks up at the arrow. -->
+              <span v-if="msg.route" class="log-route">
+                <template v-if="msg.route.taken.length">
+                  <span
+                    v-for="(t, i) in msg.route.taken"
+                    :key="`t-${t.id}-${i}`"
+                    class="route-hop"
+                  >
+                    <span class="route-arrow">→</span>
+                    <span class="route-target" :title="endTitle(t)">{{ endName(t) }}</span>
+                    <span v-if="endEdgeTags(t)" class="route-edge-label">{{ endEdgeTags(t) }}</span>
+                  </span>
+                </template>
+                <span v-else class="route-nowhere">→ nowhere</span>
+
+                <span v-if="msg.route.reason?.length" class="route-reason">
+                  on [{{ msg.route.reason.join(', ') }}]
+                </span>
+
+                <!-- Where it didn't go. Usually the reason the log is open. -->
+                <span
+                  v-for="(p, i) in msg.route.pruned"
+                  :key="`p-${p.id}-${i}`"
+                  class="route-pruned"
+                  :title="endTitle(p, 'pruned: ')"
+                >
+                  ⊘ {{ endName(p) }}
+                </span>
+              </span>
+              <!-- Any other line may name nodes too (a join waiting on its
+                   branches, a GoTo, a plugin's own message) — resolve those ids
+                   the same way instead of printing them raw. -->
+              <LogRefText
+                v-else
+                class="log-message"
+                :text="msg.message"
+                :flow="msg.flow"
+                :fallback="msg.nodeTitle"
+              />
               <button
                 v-if="isExpandable(msg)"
                 class="row-copy"
@@ -971,6 +1078,17 @@ async function copyAll() {
   color: #0d9488;
 }
 
+/* A join node parking on its inbound branches, then released. */
+.kind-dep-wait {
+  background: rgba(245, 158, 11, 0.18);
+  color: #92600a;
+}
+
+.kind-dep-ready {
+  background: rgba(46, 204, 113, 0.18);
+  color: #176b3a;
+}
+
 .kind-other {
   background: rgba(241, 196, 15, 0.18);
   color: #7d6508;
@@ -1021,6 +1139,16 @@ async function copyAll() {
     color: #2dd4bf;
   }
 
+  .kind-dep-wait {
+    background: rgba(251, 191, 36, 0.2);
+    color: #fcd34d;
+  }
+
+  .kind-dep-ready {
+    background: rgba(52, 211, 153, 0.2);
+    color: #6ee7b7;
+  }
+
   .kind-other {
     background: rgba(250, 204, 21, 0.18);
     color: #fde68a;
@@ -1030,6 +1158,87 @@ async function copyAll() {
     background: rgba(45, 212, 191, 0.14);
     color: #5eead4;
     border-color: rgba(45, 212, 191, 0.32);
+  }
+}
+
+/* Route line — an edge.select rendered as the path it chose.
+   The taken hops share the green of the `route` kind badge so a decision reads
+   as one thing; everything the flow rejected is deliberately quieter. */
+.log-route {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.route-hop {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.route-arrow {
+  color: var(--text-muted, #b9b5bf);
+  font-size: 11px;
+}
+
+.route-target {
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(46, 204, 113, 0.16);
+  color: #176b3a;
+  word-break: break-word;
+}
+
+/* The edge's own label, when the graph put one on it. */
+.route-edge-label {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  background: rgba(140, 140, 150, 0.12);
+  color: var(--text, #6b6375);
+}
+
+.route-nowhere {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted, #b9b5bf);
+}
+
+.route-reason {
+  font-size: 10px;
+  color: var(--text, #6b6375);
+  white-space: nowrap;
+}
+
+.route-pruned {
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  background: rgba(140, 140, 150, 0.1);
+  color: var(--text-muted, #8a8590);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  word-break: break-word;
+}
+
+@media (prefers-color-scheme: dark) {
+  .route-target {
+    background: rgba(52, 211, 153, 0.18);
+    color: #6ee7b7;
+  }
+
+  .route-edge-label {
+    background: rgba(156, 163, 175, 0.16);
+    color: #d1d5db;
+  }
+
+  .route-pruned {
+    background: rgba(156, 163, 175, 0.12);
+    color: #9ca3af;
   }
 }
 

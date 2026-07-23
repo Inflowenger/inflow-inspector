@@ -2,8 +2,11 @@ import { ref, onUnmounted, shallowRef, type Ref } from 'vue'
 import { io, type Socket } from 'socket.io-client'
 import {
   createFlowTracker,
+  describeEvent,
   type FlowTracker,
   type Level,
+  type LogCategory,
+  type LogDetail,
   type ProcEvent,
 } from '@inflowenger/flow-trace'
 import { apiClient } from '../api/client'
@@ -17,11 +20,46 @@ export type LogLevel = Level
  * job is to show what actually came off the wire, so nothing is dropped on the
  * way in. Everything else is derived for display.
  */
+/**
+ * One end of a routing decision — ids, because that is all the stream carries.
+ *
+ * Names live in the editor: resolve `node` (and `edgeId`, whose tags are its
+ * label) against the saved graph at render time — see `useFlowGraphs`.
+ */
+export interface RouteEnd {
+  /** The node id this branch lands on. */
+  id: string
+  /** The flow it lands in — the same flow, unless a GoTo crosses one. */
+  flow?: string
+  /** The graph's edge id. Empty for edges the runtime synthesised. */
+  edgeId?: string
+  /** The tags the runtime matched to reach this decision. */
+  tags: string[]
+}
+
+/**
+ * Where a routing decision went — an `edge.select` row's payload, rendered as a
+ * route line rather than a sentence.
+ *
+ * `pruned` is what the runtime evaluated and rejected: worth showing, because
+ * where the flow *didn't* go is usually why the log got opened.
+ */
+export interface LogRoute {
+  from: RouteEnd
+  taken: RouteEnd[]
+  pruned: RouteEnd[]
+  /** The tags a contract returned to make this choice. */
+  reason?: string[]
+}
+
 export interface FlowLogMessage {
   id: string
   timestamp: number
   level: LogLevel
-  /** Human-readable one-liner. See `summarize`. */
+  /**
+   * Human-readable one-liner, from flow-trace's `describeEvent`. It names nodes
+   * and edges by **id**; pass it through `resolveRefs` to show titles.
+   */
   message: string
   /** Present for events off the wire; absent for local notices (connect, etc.). */
   event?: ProcEvent
@@ -29,15 +67,19 @@ export interface FlowLogMessage {
   seq?: number
   kind?: string
   /**
-   * Sub-kind of a `log` event, from `detail.category` — `progress` (a job frame)
-   * or `protocol` (an inflowV1 transport trace). Absent for plain logs and for
-   * every non-log kind. Drives the badge so these read as their own category.
+   * Sub-kind of a `log` event, from `detail.category` — `progress` (a job
+   * frame), `protocol` (an inflowV1 transport trace), or `dep.wait` /
+   * `dep.ready` (a join node parking on its inbound branches, then released).
+   * Absent for plain logs and for every non-log kind. Drives the badge so these
+   * read as their own category.
    */
-  category?: string
+  category?: LogCategory
   src?: string
   flow?: string
   nodeId?: string
   nodeTitle?: string
+  /** Set on `edge.select` only — the row renders as a route instead of text. */
+  route?: LogRoute
 }
 
 export interface SocketState {
@@ -51,69 +93,25 @@ let globalSocket: Socket | null = null
 /** Cap on retained log lines. A looping flow emits without bound. */
 const MAX_MESSAGES = 5000
 
-function shortNode(flow?: string, node?: string): string {
-  if (!flow || !node) return ''
-  return `${flow}/${node}`
+/** Read one branch of an `edge.select`. Ids only — the wire carries no names. */
+function routeEnd(edge: Record<string, any>): RouteEnd {
+  return {
+    id: String(edge?.node ?? ''),
+    flow: edge?.flow ? String(edge.flow) : undefined,
+    edgeId: edge?.edgeId ? String(edge.edgeId) : undefined,
+    tags: Array.isArray(edge?.tags) ? edge.tags : [],
+  }
 }
 
-/**
- * A readable one-liner per event kind.
- *
- * The raw JSON is always one click away, so this optimises for scanning: what
- * happened, to which node, and why.
- */
-function summarize(event: ProcEvent): string {
+/** The route an `edge.select` describes, or undefined for every other kind. */
+function routeOf(event: ProcEvent): LogRoute | undefined {
+  if (event.kind !== 'edge.select') return undefined
   const d = (event.detail ?? {}) as Record<string, any>
-  switch (event.kind) {
-    case 'proc.start':
-      return `Process started at ${shortNode(d.flow, d.node)}`
-    case 'proc.finish': {
-      const ms = d.durationMs ?? 0
-      if (d.status === 'completed') return `Process completed in ${ms}ms`
-      if (d.status === 'stopped') return `Process stopped after ${ms}ms`
-      return `Process failed after ${ms}ms${d.error ? `: ${d.error}` : ''}`
-    }
-    case 'node.enter': {
-      const attempt = d.attempt > 1 ? ` (attempt ${d.attempt})` : ''
-      return `→ ${d.title ?? event.node} entered${attempt}`
-    }
-    case 'node.exit': {
-      if (d.status === 'error') return `✕ exited with error: ${d.error ?? 'unknown'}`
-      return `✓ exited ok in ${d.durationMs ?? 0}ms`
-    }
-    case 'edge.select': {
-      const taken = (d.taken ?? []) as Array<{ node: string }>
-      const pruned = (d.pruned ?? []) as Array<{ node: string }>
-      const reason = d.reason?.tags?.length ? ` on [${d.reason.tags.join(', ')}]` : ''
-      if (taken.length === 0) return `Routed nowhere${reason}`
-      const targets = taken.map((t) => t.node).join(', ')
-      const skipped = pruned.length > 0 ? `, skipped ${pruned.length}` : ''
-      return `Routed to ${targets}${reason}${skipped}`
-    }
-    case 'flow.jump':
-      return `Jumped to ${shortNode(d.to?.flow, d.to?.node)}${
-        d.ret ? `, returns at ${shortNode(d.ret.flow, d.ret.node)}` : ''
-      }`
-    case 'log': {
-      // A plugin sub-classifies some logs (see FlowLogMessage.category). A
-      // progress frame has no `msg` — build one from percent + frame so the
-      // line isn't blank; a protocol trace has a `msg` but reads better with
-      // its proto and subject.
-      if (d.category === 'progress') {
-        const frame = (d.frame ?? {}) as { title?: string; content?: string }
-        const label = [frame.title, frame.content].filter(Boolean).join(': ')
-        const pct = `${d.percent ?? 0}%`
-        return label ? `${pct} — ${label}` : pct
-      }
-      if (d.category === 'protocol') {
-        const head = [d.proto, d.msg].filter(Boolean).join(' · ')
-        return d.subject ? `${head} → ${d.subject}` : head
-      }
-      return String(d.msg ?? '')
-    }
-    default:
-      // An unknown kind from a newer engine — show it rather than hide it.
-      return `${event.kind}`
+  return {
+    from: { id: String(event.node ?? ''), flow: event.flow, tags: [] },
+    taken: ((d.taken ?? []) as Record<string, any>[]).map(routeEnd),
+    pruned: ((d.pruned ?? []) as Record<string, any>[]).map(routeEnd),
+    reason: d.reason?.tags?.length ? (d.reason.tags as string[]) : undefined,
   }
 }
 
@@ -172,19 +170,23 @@ export function useSocketIO() {
   // `event` (rather than the socket) means lines arrive in seq order, already
   // demultiplexed and validated.
   tracker.value.on('event', (event) => {
+    const route = routeOf(event)
     pushMessage({
       timestamp: event.ts,
       level: event.level,
-      message: summarize(event),
+      message: describeEvent(event),
       event,
       pid: event.pid,
       seq: event.seq,
       kind: event.kind,
-      category: event.kind === 'log' ? ((event.detail as any)?.category as string | undefined) : undefined,
+      category: event.kind === 'log' ? (event.detail as LogDetail | undefined)?.category : undefined,
       src: event.src,
       flow: event.flow,
       nodeId: event.node,
+      // The only title on the wire: `node.enter` reports the compiled node's
+      // title. Every other reference is resolved from the graph as it renders.
       nodeTitle: (event.detail as any)?.title,
+      route,
     })
   })
 

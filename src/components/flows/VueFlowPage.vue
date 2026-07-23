@@ -37,6 +37,7 @@ import { apiClient } from '../../api/client.ts'
 import type { PaginatedResponse } from '../../api/types'
 import { useSocketIO } from '../../composables/useSocketIO.ts'
 import { useRunningProcesses } from '../../composables/useRunningProcesses.ts'
+import { useFlowGraphs } from '../../composables/useFlowGraphs.ts'
 import FlowLogDrawer from '../drawers/FlowLogDrawer.vue'
 import RunningProcessesPanel from './RunningProcessesPanel.vue'
 
@@ -341,6 +342,10 @@ async function saveDiagram() {
     let res = await upsertFlow(diagram)
       console.log("save result: ",res)
 
+  // The log drawer names nodes and edges by resolving ids against the saved
+  // graph — a rename here must not leave it showing the old titles.
+  flowGraphs.invalidate(props.id || res?.data?.data?.id)
+
   // If this was a new flow, redirect to the flow view page
   if (!props.id && res?.data?.data?.id) {
     const newId = res.data.data.id
@@ -510,6 +515,8 @@ function onNodeDragStop(dragEvent: any) {
 }
 
 // ---- Socket.IO Dev Panel Logs ----
+// Ids → titles for the log drawer; invalidated whenever this page saves.
+const flowGraphs = useFlowGraphs()
 const { state: socketState, messages: logMessages, isOpen: showLogDrawer, connect: connectSocket, clearMessages, open: openLogDrawer, tracker } = useSocketIO()
 
 // ---- Running Processes Tracking ----
